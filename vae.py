@@ -6,15 +6,15 @@ eps = 1e-6
 
 class VAE(nn.Module):
     def __init__(self, input_dim, z_dim, x_dim, hidden_dim, num_layers, dropout, bidirectional, neuron_bias=None):
-        super(VAE, self).__init__()
+        super().__init__()
         self.z_dim, self.x_dim = z_dim, x_dim        
+        assert x_dim == z_dim
         output_dim = (z_dim + x_dim)*(z_dim + x_dim + 1)
 
         self.encoder = nn.GRU(input_dim, hidden_dim, num_layers=num_layers, batch_first=True,
                               bidirectional=bidirectional, dropout=dropout if num_layers > 1 else 0)
         self.posterior = nn.Linear(hidden_dim*2 if bidirectional else hidden_dim, output_dim)
-        self.c1 = nn.Linear(1, input_dim)
-        self.c2 = nn.Linear(1, input_dim)  
+        self.linear_maps = nn.ModuleList([nn.Linear(1, input_dim) for _ in range(x_dim)])
         # expand neuron bias in batch dimension        
         self.neuron_bias = neuron_bias.unsqueeze(0) if neuron_bias is not None else None
         # self.sigmoid_scaling_factor = nn.Parameter(torch.tensor(2.0), requires_grad=True)
@@ -56,10 +56,10 @@ class VAE(nn.Module):
         # z = torch.sigmoid(z)
         z = torch.softmax(z, dim=-1)
         # map x to observation        
-        c1x = self.c1(x[:, :, 0:1])
-        c2x = self.c2(x[:, :, 1:])
-        # weight
-        y = z[:, :, 0:1] * c1x + z[:, :, 1:2] * c2x        
+        Cx = torch.stack([self.linear_maps[i](x[:, :, i:i+1]) for i in range(self.z_dim)], dim=-1)        
+        # element wise multiplication of Cx with z
+        # print(Cx.shape, z.unsqueeze(3).shape)
+        y_recon = torch.sum(Cx*z.unsqueeze(2), dim=3)        
         if self.neuron_bias is not None:
             y = y + self.neuron_bias
         y_recon = nn.Softplus()(y)

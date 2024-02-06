@@ -8,7 +8,7 @@ import utils
 
 class Model(nn.Module):
     def __init__(self, config, input_dim, z_dim, x_dim, neuron_bias=None):
-        super(Model, self).__init__()
+        super().__init__()
         self.config = config
         # vae
         hidden_dim, num_layers = config['rnn']['hidden_size'], config['rnn']['num_layers']
@@ -25,14 +25,16 @@ class Model(nn.Module):
         self.behavior_weight = behavior_weight
             
         if behavior_decoder == 'linear':            
-            self.behavior_decoder = LinearAccDecoder(config, x_dim)            
+            self.behavior_decoder = LinearAccDecoder(config, x_dim)                        
             print('Number of trainable parameters in behavior decoder:', utils.count_parameters(self.behavior_decoder))
         elif behavior_decoder == 'cnn':
             self.behavior_decoder = CNNDecoder(config, x_dim)
+            print('Number of trainable parameters in behavior decoder:', utils.count_parameters(self.behavior_decoder))
         else:
             self.behavior_decoder = None
             self.behavior_weight = 0        
             print("No behavior decoder")
+        
         
         # name model
         self.arch_name = self.vae.arch_name        
@@ -55,7 +57,7 @@ class Model(nn.Module):
         loss = self.vae.loss(y, y_recon, mu, A)
         loss_l = [loss.item()]
         if self.behavior_decoder:              
-            behave_loss = self.behavior_weight * self.behavior_decoder.loss(behavior_pred, behavior_truth)
+            behave_loss = self.behavior_weight * self.behavior_decoder.loss(behavior_pred, behavior_truth, z)
             loss += behave_loss
             loss_l.append(behave_loss.item())
         return loss, loss_l

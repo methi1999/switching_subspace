@@ -22,14 +22,16 @@ rnn:
   dropout: 0.2
 
 decoder:
-  behavior_weight: 
-  stimulus_weight:
+  behavior_weight: 5
+  stimulus_weight: 2
   which: ''
   linear:
-    hidden_dims: [8, 8]
+    hidden_dims: [32, 32]
+    dropout: 0.2
   cnn:
-    channels: [8, 8]
+    channels: [8, 8, 8]
     kernel_size: 3
+    dropout: 0.2
 
 seed: 42
 lr: 0.005
