@@ -1,0 +1,45 @@
+dir:
+  results: 'results/'
+  dataset: '../pi-vae-main/data_own/'
+
+shape_dataset:
+  id: sub-221CR_ses-20190515T160400 # my
+  # id: sub-221CR_ses-20190514T142312
+  # id: sub-231CR_ses-20190924T161413 # abhishek
+  # id: sub-231CR_ses-20190921T144923
+  # id: sub-KM131_ses-20180117T194023
+  # id: sub-267CR_ses-20200331T161053
+  # id: sub-245CR_ses-20200331T142427
+  # id: sub-KF134_ses-20180208T171905
+
+  win_len: 0.1
+
+rnn:  
+  rnn_type: 'GRU'
+  bidirectional: True
+  hidden_size: 16
+  num_layers: 1
+  dropout: 0.2
+
+decoder:
+  behavior_weight: 
+  stimulus_weight:
+  which: ''
+  linear:
+    hidden_dims: [8, 8]
+  cnn:
+    channels: [8, 8]
+    kernel_size: 3
+
+seed: 42
+lr: 0.005
+
+early_stop:
+  patience: 50
+  delta: 1
+  test_every_new: 5
+
+epochs: 2000
+test_every: 20
+plot_every: 5
+batch_size: 64
