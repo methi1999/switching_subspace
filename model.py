@@ -4,18 +4,16 @@ from decoder import LinearAccDecoder, CNNDecoder
 from vae import VAE
 import os
 import utils
-
+from gp import gp_ll
 
 class Model(nn.Module):
-    def __init__(self, config, input_dim, z_dim, x_dim, neuron_bias=None):
+    def __init__(self, config, input_dim, neuron_bias=None):
         super().__init__()
         self.config = config
-        # vae
-        hidden_dim, num_layers = config['rnn']['hidden_size'], config['rnn']['num_layers']
-        bidirectional = config['rnn']['bidirectional']
-        rnn_dropout = config['rnn']['dropout']
-        self.vae = VAE(input_dim, z_dim, x_dim, hidden_dim, num_layers,
-                        rnn_dropout, bidirectional, neuron_bias)
+        # dimensions
+        z_dim, x_dim = config['dim_x_z'], config['dim_x_z']
+        # vae        
+        self.vae = VAE(config, input_dim, z_dim, x_dim, neuron_bias)
         # print num train params in vae
         print('Number of trainable parameters in VAE:', utils.count_parameters(self.vae))
         
@@ -33,8 +31,7 @@ class Model(nn.Module):
         else:
             self.behavior_decoder = None
             self.behavior_weight = 0        
-            print("No behavior decoder")
-        
+            print("No behavior decoder")        
         
         # name model
         self.arch_name = self.vae.arch_name        
@@ -45,12 +42,12 @@ class Model(nn.Module):
             os.makedirs(self.final_path)
     
     def forward(self, spikes):
-        y_recon, (mu, A), (z, x) = self.vae(spikes)
+        y_recon, (mu, A), (z, x) = self.vae(spikes)        
         if self.behavior_decoder:
             behavior = self.behavior_decoder(x, z)
             # behavior = self.behavior_decoder(mu[:, :, self.vae.z_dim:], mu[:, :, :self.vae.z_dim])
         else:
-            behavior = None        
+            behavior = None
         return y_recon, (mu, A), (z, x), behavior
 
     def loss(self, y, y_recon, mu, A, z, x, behavior_pred, behavior_truth):
@@ -60,6 +57,12 @@ class Model(nn.Module):
             behave_loss = self.behavior_weight * self.behavior_decoder.loss(behavior_pred, behavior_truth, z)
             loss += behave_loss
             loss_l.append(behave_loss.item())
+        # smooth both x and z                
+        # for j in range(z.shape[0]):     
+        #     loss -= 0.1*gp_ll(z[j], length_scale=1.0, noise=1e-4)
+        #     loss -= 0.1*gp_ll(x[j], length_scale=1.0, noise=1e-4)
+        # loss -= 0.1*gp_ll(z, length_scale=1.0, noise=1e-4)
+        # loss -= 0.1*gp_ll(x, length_scale=1.0, noise=1e-4)
         return loss, loss_l
         
     def save_model(self, save_prefix):
@@ -90,7 +93,7 @@ class Model(nn.Module):
         """
         
         if base_path is None:
-            base_path = utils.model_store_path(self.config)
+            base_path = utils.model_store_path(self.config, self.arch_name)
         if save_prefix is not None:
             filename = os.path.join(base_path, str(save_prefix))
         else:

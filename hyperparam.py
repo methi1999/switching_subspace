@@ -114,7 +114,7 @@ def one_train(config, device):
 # create optuna function
 def objective_mlp(trial):
     config = deepcopy(config_global)
-    config['rnn']['hidden_size'] = trial.suggest_categorical('dim_z', [8, 16, 32, 64])
+    config['rnn']['hidden_size'] = trial.suggest_categorical('hidden_size', [8, 16, 32, 64])
     config['rnn']['num_layers'] = trial.suggest_categorical('num_layers', [1, 2, 3])    
     config['batch_size'] = trial.suggest_categorical('batch_size', [16, 32, 64, 128])        
     config['rnn']['dropout'] = trial.suggest_float('dropout', 0.1, 0.5)

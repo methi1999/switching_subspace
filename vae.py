@@ -5,19 +5,33 @@ from decoder import LinearAccDecoder
 eps = 1e-6
 
 class VAE(nn.Module):
-    def __init__(self, input_dim, z_dim, x_dim, hidden_dim, num_layers, dropout, bidirectional, neuron_bias=None):
+    def __init__(self, config, input_dim, z_dim, x_dim, neuron_bias=None):
         super().__init__()
         self.z_dim, self.x_dim = z_dim, x_dim        
         assert x_dim == z_dim
         output_dim = (z_dim + x_dim)*(z_dim + x_dim + 1)
 
+        hidden_dim, num_layers = config['rnn']['hidden_size'], config['rnn']['num_layers']
+        bidirectional = config['rnn']['bidirectional']
+        dropout = config['rnn']['dropout']
+
         self.encoder = nn.GRU(input_dim, hidden_dim, num_layers=num_layers, batch_first=True,
                               bidirectional=bidirectional, dropout=dropout if num_layers > 1 else 0)
         self.posterior = nn.Linear(hidden_dim*2 if bidirectional else hidden_dim, output_dim)
-        self.linear_maps = nn.ModuleList([nn.Linear(1, input_dim) for _ in range(x_dim)])
+        
+        # encoder_layer = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=4, dropout=dropout, dim_feedforward=hidden_dim)
+        # self.encoder = nn.Sequential(nn.Linear(input_dim, hidden_dim),
+        #                              nn.TransformerEncoder(encoder_layer, num_layers=num_layers))
+        # self.posterior = nn.Linear(hidden_dim, output_dim)
+        
+        
+        self.linear_maps = nn.ModuleList([nn.Linear(1, input_dim) for _ in range(x_dim)])        
         # expand neuron bias in batch dimension        
         self.neuron_bias = neuron_bias.unsqueeze(0) if neuron_bias is not None else None
         # self.sigmoid_scaling_factor = nn.Parameter(torch.tensor(2.0), requires_grad=True)
+
+        # softmax temperature
+        self.softmax_temp = config['rnn']['softmax_temp']
 
         # name model
         self.arch_name = 'vae_{}_{}'.format(hidden_dim, num_layers)
@@ -46,6 +60,7 @@ class VAE(nn.Module):
         # y is of shape (batch_size, seq_len, input_dim)
         # batch, seq, input_dim = y.shape
         encoded, _ = self.encoder(y)
+        # encoded = self.encoder(y)
         encoded = self.posterior(encoded)
         mu, A = self.split(encoded)
         # sample z and x
@@ -54,15 +69,15 @@ class VAE(nn.Module):
         z, x = sample_zx[:, :, :self.z_dim], sample_zx[:, :, self.z_dim:]
         # z = torch.sigmoid(z*self.sigmoid_scaling_factor)
         # z = torch.sigmoid(z)
-        z = torch.softmax(z, dim=-1)
+        z = torch.nn.Softmax(dim=-1)(z/self.softmax_temp)
         # map x to observation        
-        Cx = torch.stack([self.linear_maps[i](x[:, :, i:i+1]) for i in range(self.z_dim)], dim=-1)        
-        # element wise multiplication of Cx with z
-        # print(Cx.shape, z.unsqueeze(3).shape)
-        y_recon = torch.sum(Cx*z.unsqueeze(2), dim=3)        
+        Cx_list = [self.linear_maps[i](x[:, :, i:i+1]) for i in range(self.x_dim)]        
+        Cx = torch.stack(Cx_list, dim=-1)        
+        y_recon = torch.sum(Cx * z.unsqueeze(2), dim=3)        
+
         if self.neuron_bias is not None:
-            y = y + self.neuron_bias
-        y_recon = nn.Softplus()(y)
+            y_recon = y_recon + self.neuron_bias
+        y_recon = nn.Softplus()(y_recon)
         return y_recon, (mu, A), (z, x)
 
     # def sample(self, num_samples):

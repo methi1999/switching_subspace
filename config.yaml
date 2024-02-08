@@ -14,16 +14,20 @@ shape_dataset:
 
   win_len: 0.1
 
+dim_x_z: 3
+
+
 rnn:  
   rnn_type: 'GRU'
   bidirectional: True
-  hidden_size: 16
+  hidden_size: 32
   num_layers: 1
   dropout: 0.2
+  softmax_temp: 0.1
 
 decoder:
-  behavior_weight: 5
-  stimulus_weight: 2
+  behavior_weight: 25
+  stimulus_weight: 5
   which: ''
   linear:
     hidden_dims: [32, 32]
@@ -34,14 +38,14 @@ decoder:
     dropout: 0.2
 
 seed: 42
-lr: 0.005
+lr: 0.01
 
 early_stop:
-  patience: 50
+  patience: 20
   delta: 1
   test_every_new: 5
 
 epochs: 2000
 test_every: 20
 plot_every: 5
-batch_size: 64
+batch_size: 16

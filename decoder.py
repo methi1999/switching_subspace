@@ -25,11 +25,12 @@ class LinearAccDecoder(nn.Module):
         self.forward = self.forward1
         self.loss = self.loss1
     
-    def forward1(self, x, z):
+    def forward1(self, x, z):        
         # x and z are of shape (batch_size, seq_len, input_dim)
         x = self.fc(x)
+        num_heads = x.size(-1)        
         # weight by z
-        element_wise = x * z
+        element_wise = x * z[:, :, :num_heads]
         return torch.sum(element_wise, dim=1)
 
     def forward2(self, x, z):
