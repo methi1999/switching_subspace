@@ -1,6 +1,6 @@
 dir:
   results: 'results/'
-  dataset: '../pi-vae-main/data_own/'
+  dataset: '../data_own/'
 
 shape_dataset:
   id: sub-221CR_ses-20190515T160400 # my
@@ -14,38 +14,48 @@ shape_dataset:
 
   win_len: 0.1
 
-dim_x_z: 3
+dim_x_z: 2
 
 
 rnn:  
-  rnn_type: 'GRU'
+  # rnn_type: 'GRU'
   bidirectional: True
   hidden_size: 32
   num_layers: 1
-  dropout: 0.2
-  softmax_temp: 0.1
+  dropout: 0.15
+  softmax_temp: 1
+  lr: 0.01
+  weight_decay: 0
 
 decoder:
-  behavior_weight: 25
-  stimulus_weight: 5
-  which: ''
-  linear:
-    hidden_dims: [32, 32]
-    dropout: 0.2
+  behavior_weight: 20
+  stimulus_weight: 0
+  choice_weight: 1
+  which: 'cnn_indi'
+  # linear:
+  #   hidden_dims: [8, 8]
+  #   dropout: 0.1
+  #   lr: 0.0003
   cnn:
-    channels: [8, 8, 8]
+    channels: [8, 8, 8]    
     kernel_size: 3
-    dropout: 0.2
+    dropout: 0.25
+    lr: 0.1
+    weight_decay: 0
+  
+  scheduler:
+    which: 'cosine'
+    cosine_restart_after: 100
+    const_factor: 0.95
 
 seed: 42
-lr: 0.01
 
 early_stop:
-  patience: 20
+  patience: 50
   delta: 1
-  test_every_new: 5
+  test_every_new: 2
 
 epochs: 2000
 test_every: 20
 plot_every: 5
-batch_size: 16
+batch_size: 48

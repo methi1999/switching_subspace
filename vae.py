@@ -1,11 +1,14 @@
 import torch
 import torch.nn as nn
 from decoder import LinearAccDecoder
+from gp import moving_average
+import math
+import os
 
 eps = 1e-6
 
 class VAE(nn.Module):
-    def __init__(self, config, input_dim, z_dim, x_dim, neuron_bias=None):
+    def __init__(self, config, input_dim, z_dim, x_dim, neuron_bias=None, init='vae_2_32_1_bi_standard'):
         super().__init__()
         self.z_dim, self.x_dim = z_dim, x_dim        
         assert x_dim == z_dim
@@ -15,17 +18,39 @@ class VAE(nn.Module):
         bidirectional = config['rnn']['bidirectional']
         dropout = config['rnn']['dropout']
 
+        # self.encoder = nn.Sequential(nn.Linear(input_dim, hidden_dim))
+        # self.posterior = nn.Linear(hidden_dim, output_dim)
+
+        # self.encoder = nn.RNN(input_dim, hidden_dim, num_layers=num_layers, batch_first=True,
+        #                       bidirectional=bidirectional, dropout=dropout if num_layers > 1 else 0)
+        # self.posterior = nn.Linear(hidden_dim*2 if bidirectional else hidden_dim, output_dim)
+
         self.encoder = nn.GRU(input_dim, hidden_dim, num_layers=num_layers, batch_first=True,
                               bidirectional=bidirectional, dropout=dropout if num_layers > 1 else 0)
         self.posterior = nn.Linear(hidden_dim*2 if bidirectional else hidden_dim, output_dim)
         
-        # encoder_layer = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=4, dropout=dropout, dim_feedforward=hidden_dim)
-        # self.encoder = nn.Sequential(nn.Linear(input_dim, hidden_dim),
-        #                              nn.TransformerEncoder(encoder_layer, num_layers=num_layers))
+        # self.encoder = TransformerModel(input_dim, z_dim, x_dim, hidden_dim, 4, hidden_dim, num_layers, dropout)
         # self.posterior = nn.Linear(hidden_dim, output_dim)
         
-        
+        # reconstruction
         self.linear_maps = nn.ModuleList([nn.Linear(1, input_dim) for _ in range(x_dim)])        
+
+        # reconstruction_layers = nn.Sequential(nn.Linear(1, 32), nn.Tanh(),
+        #                                       nn.Linear(32, 32), nn.ReLU(),
+        #                                       nn.Linear(32, input_dim))
+        # self.linear_maps = nn.ModuleList([reconstruction_layers for _ in range(x_dim)])
+
+        # gru_recon = nn.RNN(1, 16, num_layers=1, bidirectional=False, batch_first=True)
+        # self.linear_maps = nn.ModuleList([gru_recon, nn.Linear(1, input_dim)])
+        # # self.linear_maps = nn.ModuleList([nn.Linear(1, input_dim), gru_recon])
+        # self.linear2 = nn.Linear(16, input_dim)
+
+        # def ret(input_dim, output_dim):
+        #     return nn.Sequential(nn.Linear(input_dim, 4), nn.Tanh(),
+        #                          nn.Linear(4, 8), nn.Tanh(),
+        #                          nn.Linear(8, output_dim))
+        # self.linear_maps = nn.ModuleList([ret(1, input_dim) for _ in range(x_dim)])        
+        
         # expand neuron bias in batch dimension        
         self.neuron_bias = neuron_bias.unsqueeze(0) if neuron_bias is not None else None
         # self.sigmoid_scaling_factor = nn.Parameter(torch.tensor(2.0), requires_grad=True)
@@ -34,11 +59,34 @@ class VAE(nn.Module):
         self.softmax_temp = config['rnn']['softmax_temp']
 
         # name model
-        self.arch_name = 'vae_{}_{}'.format(hidden_dim, num_layers)
+        self.arch_name = 'vae_{}_{}_{}'.format(z_dim, hidden_dim, num_layers)
         if bidirectional:
             self.arch_name += '_bi'
         if neuron_bias is not None:
-            self.arch_name += '_bias'        
+            self.arch_name += '_bias'
+        
+        # moving average
+        self.moving_average = None
+        if self.moving_average is not None:
+            self.arch_name += '_average_'+str(self.moving_average)
+        
+        # optmizer
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=config['rnn']['lr'], weight_decay=config['rnn']['weight_decay'])        
+
+        # # init model        
+        # if init is not None:
+        #     try:
+        #         data_des = 'dandi_{}/{}_ms'.format(config['shape_dataset']['id'], int(config['shape_dataset']['win_len']*1000))
+        #         pth = os.path.join(config['dir']['results'], data_des, init, 'best')
+        #         checkpoint = torch.load(pth, map_location=lambda storage, loc: storage)
+        #         # replace encoder in keys with nothing
+        #         checkpoint['model_state_dict'] = {k.replace('vae.', ''): v for k, v in checkpoint['model_state_dict'].items()}
+        #         self.load_state_dict(checkpoint['model_state_dict'])
+        #         print("Loading from pre-trained")
+        #     except:
+        #         print("Failed to load pre-trained")
+
+        assert self.neuron_bias is None and self.moving_average is None, "Not implemented"
 
     def split(self, encoded):
         batch, seq, _ = encoded.shape
@@ -50,7 +98,7 @@ class VAE(nn.Module):
         # mu is of shape (batch, seq, z+x)
         batch, seq, mu_dim = mu.shape
         A_flat = A.view(batch*seq, mu_dim, mu_dim)
-        mu_flat = mu.view(batch*seq, mu_dim, 1)
+        mu_flat = mu.reshape(batch*seq, mu_dim).unsqueeze(-1)
         eps = torch.randn_like(mu_flat)
         # print(mu.shape, A.shape, eps.shape)
         sample = (mu_flat + torch.bmm(A_flat, eps)).squeeze(-1)        
@@ -61,22 +109,43 @@ class VAE(nn.Module):
         # batch, seq, input_dim = y.shape
         encoded, _ = self.encoder(y)
         # encoded = self.encoder(y)
+        # if isinstance(encoded, tuple):
+        #     encoded = encoded[0]
+
         encoded = self.posterior(encoded)
         mu, A = self.split(encoded)
+
+        # # smooth means        
+        # if self.moving_average is not None:
+        #     # both
+        #     # mu = moving_average(mu, self.moving_average)
+        #     # only z
+        #     mu[:, :, :self.z_dim] = moving_average(mu[:, :, :self.z_dim], self.moving_average)
+
+        # accumulate
+        # mu = mu - mu[:, 0:1, :] # first is 0
+        # mu = torch.cumsum(mu, dim=1)
+        
         # sample z and x
         sample_zx = self.reparameterize(mu, A)
+        
         # extract x and z
         z, x = sample_zx[:, :, :self.z_dim], sample_zx[:, :, self.z_dim:]
         # z = torch.sigmoid(z*self.sigmoid_scaling_factor)
         # z = torch.sigmoid(z)
-        z = torch.nn.Softmax(dim=-1)(z/self.softmax_temp)
+        z = torch.nn.Softmax(dim=-1)(z/self.softmax_temp)                
+        # z = torch.nn.Tanh(dim=-1)(z/self.softmax_temp)                
+        
         # map x to observation        
-        Cx_list = [self.linear_maps[i](x[:, :, i:i+1]) for i in range(self.x_dim)]        
+        Cx_list = [self.linear_maps[i](x[:, :, i:i+1]) for i in range(self.x_dim)]
+        # if any element is a tuple, take the first element
+        # Cx_list = [self.linear2(Cx[0]) if isinstance(Cx, tuple) else Cx for Cx in Cx_list]
+        # print([x.shape for x in Cx_list])
         Cx = torch.stack(Cx_list, dim=-1)        
         y_recon = torch.sum(Cx * z.unsqueeze(2), dim=3)        
 
-        if self.neuron_bias is not None:
-            y_recon = y_recon + self.neuron_bias
+        # if self.neuron_bias is not None:
+        #     y_recon = y_recon + self.neuron_bias
         y_recon = nn.Softplus()(y_recon)
         return y_recon, (mu, A), (z, x)
 
@@ -86,7 +155,7 @@ class VAE(nn.Module):
     #     return x_recon
 
     def loss(self, y, y_recon, mu, A):
-        batch, seq = y.shape[0], y.shape[1]        
+        batch, seq, num_n = y.shape       
         # compute AAt
         flattened_A = A.view(batch*seq, self.z_dim+self.x_dim, self.z_dim+self.x_dim)
         cov = torch.bmm(flattened_A, torch.transpose(flattened_A, 1, 2))        
@@ -96,9 +165,59 @@ class VAE(nn.Module):
         # print(y.shape, y_recon.shape)
         recon_loss = torch.sum(y_recon - y * torch.log(y_recon))
         det = torch.det(cov)
+        # print((torch.sum(mu.pow(2), dim=1) + torch.einsum("...ii", cov) - mu.shape[1] - torch.log(det+eps)).shape)
         kl_loss = 0.5 * torch.sum(torch.sum(mu.pow(2), dim=1) + torch.einsum("...ii", cov) - mu.shape[1] - torch.log(det+eps))
+        
         return (recon_loss + kl_loss)/batch
 
     # def generate(self, num_samples):
     #     return self.sample(num_samples).detach().numpy()
     
+
+
+class PositionalEncoding(nn.Module):
+
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 500):
+        super().__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(max_len, 1, d_model)
+        pe[:, 0, 0::2] = torch.sin(position * div_term)
+        pe[:, 0, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        """
+        Arguments:
+            x: Tensor, shape ``[seq_len, batch_size, embedding_dim]``
+        """
+        x = x + self.pe[:x.size(0)]
+        return self.dropout(x)
+    
+
+class TransformerModel(nn.Module):
+
+    def __init__(self, input_dim: int, z_dim, x_dim, d_model: int, nhead: int, d_hid: int,
+                 nlayers: int, dropout: float = 0.5):
+        super().__init__()        
+        self.pos_encoder = PositionalEncoding(d_model, dropout)
+        encoder_layers = nn.TransformerEncoderLayer(d_model, nhead, d_hid, dropout)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, nlayers)        
+        self.embedding = nn.Linear(input_dim, d_model)
+        self.d_model = d_model                        
+
+    def forward(self, src):
+        """
+        Arguments:
+            src: Tensor, shape ``[batch_size, seq_len, dim]``            
+
+        Returns:
+            output Tensor of shape ``[seq_len, batch_size, ntoken]``
+        """        
+        src = self.embedding(src) * math.sqrt(self.d_model)
+        src = src.permute(1, 0, 2)        
+        src = self.pos_encoder(src)
+        output = self.transformer_encoder(src)        
+        return output.permute(1, 0, 2)

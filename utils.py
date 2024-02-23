@@ -7,8 +7,34 @@ import torch
 import json
 import yaml
 import pickle
+import matplotlib.pyplot as plt
 
 logger = logging.getLogger(__name__)
+
+
+def plot_curve(model, config, train_losses, test_losses):
+    # plot train and test loss
+    train_epochs = [x[0] for x in train_losses]
+    train_losses_only = np.array([x[1] for x in train_losses])
+    test_epochs = [x[0] for x in test_losses]
+    test_losses_only = np.array([x[1] for x in test_losses])
+    behave_weight = config['decoder']['behavior_weight']
+    # plot
+    fig, ax1 = plt.subplots()
+    ax2 = ax1.twinx()
+    ax1.plot(train_epochs, train_losses_only[:, 0], label='Train Reconstruction', color='blue', linestyle='--')
+    ax2.plot(train_epochs, train_losses_only[:, 1]/behave_weight, label='Train Decoding', color='red', linestyle='--')
+    ax1.plot(test_epochs, test_losses_only[:, 0], label='Test Reconstruction', color='blue')
+    ax2.plot(test_epochs, test_losses_only[:, 1]/behave_weight, label='Test Decoding', color='red')
+    ax1.set_xlabel('Epochs')
+    ax1.set_ylabel('Reconstruction Loss', color='blue')
+    ax2.set_ylabel('Decoding Loss', color='red')
+    plt.title('Train and Test Loss')
+    ax1.legend(loc='upper left')
+    ax2.legend(loc='upper right')
+    # plt.show()
+    plt.savefig(os.path.join(model_store_path(config, model.arch_name), 'train_test_loss.png'))
+
 
 # read yaml files that defines hyper-parameters and the location of data
 def read_config(path='config.yaml'):
@@ -32,10 +58,8 @@ def load_dataset(config):
     return behaviour_data, spikes
 
 def model_store_path(config, arch_name):    
-    folder_path = os.path.join(config['dir']['results'])    
     data_des = 'dandi_{}/{}_ms'.format(config['shape_dataset']['id'], int(config['shape_dataset']['win_len']*1000))
-    return os.path.join(folder_path, data_des, arch_name)    
-
+    return os.path.join(config['dir']['results'], data_des, arch_name)    
 
 def set_seeds(seed):
     # set seeds for reproducibility

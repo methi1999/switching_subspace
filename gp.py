@@ -1,6 +1,28 @@
 import torch
 
 
+def moving_average(x, window):
+    """
+    Compute the moving average of a 1D tensor.
+
+    Args:
+        x (torch.Tensor): Input tensor of shape (batch, time, dim).
+        window (int): Window size for the moving average.
+
+    Returns:
+        torch.Tensor: Moving average of the input tensor.
+    """
+    # return torch.nn.functional.conv1d(x.view(1, 1, -1), weight=torch.ones(1, 1, window) / window, padding=window-1).view(-1)
+    batch, time, dim = x.shape
+    x = x.permute(0, 2, 1)
+    # apply moving average to each dimension
+    outs = []
+    kernel = torch.ones(1, 1, window) / window
+    for i in range(dim):
+        outs.append(torch.nn.functional.conv1d(x[:, i:i+1, :], weight=kernel, padding='same'))
+    stacked = torch.cat(outs, dim=1).permute(0, 2, 1)
+    return stacked
+
 
 def gp_ll(x, length_scale=0.1, noise=1e-6):
     """

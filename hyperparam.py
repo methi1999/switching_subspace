@@ -5,10 +5,14 @@ import optuna
 from copy import deepcopy
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.model_selection import train_test_split
+import pickle
 
 from model import Model
 from early_stopping import EarlyStopping
 import utils
+
+
+only_look_at_decoder = False
 
 # is_cuda = torch.cuda.is_available()
 is_cuda = False
@@ -54,37 +58,45 @@ def test(model, test_loader):
     with torch.no_grad():
         for _, (behavior_batch, spikes_batch) in enumerate(test_loader):
             y_recon, (mu, A), (z, x), behavior_batch_pred = model(spikes_batch)
-            _, loss_l = model.loss(spikes_batch, y_recon, mu, A, z, x, behavior_batch_pred, behavior_batch)
+            _, loss_l = model.loss(None, spikes_batch, y_recon, mu, A, z, x, behavior_batch_pred, behavior_batch)
             test_loss += np.array(loss_l)
     # divide loss by total number of samples in dataloader    
     return test_loss/len(test_loader)
 
 
-def train(config, model, optimizer, num_epochs, train_loader, val_loader):
+def train(config, model, train_loader, val_loader):
     train_losses, test_losses = [], []
     test_every = config['test_every']
+    num_epochs = config['epochs']
     early_stop = EarlyStopping(patience=config['early_stop']['patience'], delta=config['early_stop']['delta'],
                             trace_func=print)
-    save_model = True
+    save_model = False
     for epoch in range(num_epochs):
+        # print(model.behavior_decoder.scheduler.get_last_lr())
         # forward pass
         epoch_loss = 0
-        for i, (behavior_batch, spikes_batch) in enumerate(train_loader):
+        for i, (behavior_batch, spikes_batch) in enumerate(train_loader):            
             model.train()
             y_recon, (mu, A), (z, x), behavior_pred = model(spikes_batch)
-            loss, loss_l = model.loss(spikes_batch, y_recon, mu, A, z, x, behavior_pred, behavior_batch)        
+            loss, loss_l = model.loss(epoch, spikes_batch, y_recon, mu, A, z, x, behavior_pred, behavior_batch)        
             # backward pass
-            optimizer.zero_grad()
+            model.optim_zero_grad()
             loss.backward()
-            optimizer.step()    
+            model.optim_step()
+            model.scheduler_step()
             epoch_loss += np.array(loss_l)
-        train_losses.append(epoch_loss/len(train_loader))
+        train_losses.append((epoch, epoch_loss/len(train_loader)))
         # test loss
-        if (epoch+1) % test_every == 0:
+        if (epoch+1) % test_every == 0:            
             test_loss = test(model, val_loader)
-            test_losses.append(test_loss)
-            early_stop(np.sum(test_loss), model, save_model=save_model, save_prefix='best')
-            print('Epoch [{}/{}], Train Loss: {}, Test Loss: {}'.format(epoch+1, num_epochs, train_losses[-1], test_losses[-1]))            
+            sum_test_loss = np.sum(test_loss)
+            # scheduler.step(sum_test_loss)
+            test_losses.append((epoch, test_loss))            
+            if only_look_at_decoder:
+                early_stop(test_loss[-1], model, save_model=save_model, save_prefix='best')
+            else:
+                early_stop(sum_test_loss, model, save_model=save_model, save_prefix='best')
+            print('Epoch [{}/{}], Train Loss: {}, Test Loss: {}, Best Loss: {}'.format(epoch+1, num_epochs, train_losses[-1][1], test_losses[-1][1], early_stop.best_score))
             if early_stop.slow_down:
                 test_every = config['early_stop']['test_every_new']
             else:
@@ -92,46 +104,77 @@ def train(config, model, optimizer, num_epochs, train_loader, val_loader):
             if early_stop.early_stop:
                 print("Early stopping")
                 break
+    
+    only_test_loss = [x[1][1] for x in test_losses]
+    # if only_look_at_decoder:
+    #     only_test_loss = [x[1][1] for x in test_losses]
+    # else:
+    #     only_test_loss = [np.sum(x[1]) for x in test_losses]
+    
     # compute min test loss and return it    
-    return np.min([np.sum(x) for x in test_losses])
+    # return np.min(only_test_loss), train_losses, test_losses
+    
+    # compute median of test loss in a window of 15
+    meds = []
+    window = 20
+    only_test_loss = [float('inf')]*(window) + only_test_loss + [float('inf')]*(window)
+    for i in range(window, len(only_test_loss)-window):
+        meds.append(np.median(only_test_loss[i-window:i+window]))
+    return np.min(meds), train_losses, test_losses
 
 
-def one_train(config, device):
-    num_epochs, learning_rate = config['epochs'], config['lr']
+def one_train(config, device):    
     # create model and optimizer
-    model = Model(config, input_dim=emissions_dim, z_dim=2, x_dim=2, neuron_bias=neuron_bias)
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    model = Model(config, input_dim=emissions_dim)
     # create dataloaders
     batch_size = config['batch_size']
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
     # train
-    best_test_loss = train(config, model, optimizer, num_epochs, train_loader, test_loader)
+    best_test_loss, train_losses, test_losses = train(config, model, train_loader, test_loader)
+    # utils.plot_curve(model, config, train_losses, test_losses)
+    # save losses
+    pth = utils.model_store_path(config, model.arch_name)
+    with open(os.path.join(pth, 'losses.pkl'), 'wb') as f:
+        pickle.dump((best_test_loss, train_losses, test_losses), f)
     return best_test_loss
    
 
 
 # create optuna function
-def objective_mlp(trial):
+def objective_(trial):
     config = deepcopy(config_global)
-    config['rnn']['hidden_size'] = trial.suggest_categorical('hidden_size', [8, 16, 32, 64])
-    config['rnn']['num_layers'] = trial.suggest_categorical('num_layers', [1, 2, 3])    
-    config['batch_size'] = trial.suggest_categorical('batch_size', [16, 32, 64, 128])        
-    config['rnn']['dropout'] = trial.suggest_float('dropout', 0.1, 0.5)
-    config['lr'] = trial.suggest_float('lr', 1e-3, 1e-1, log=True)
+    config['rnn']['hidden_size'] = trial.suggest_categorical('hidden_size', [24, 32, 48])
+    # config['rnn']['num_layers'] = trial.suggest_categorical('num_layers', [1, 2])        
+    config['rnn']['num_layers'] = 1       
+    # config['rnn']['dropout'] = trial.suggest_float('dropout', 0.1, 0.5)
+    config['rnn']['dropout'] = 0.15
+    config['batch_size'] = trial.suggest_categorical('batch_size', [32, 48, 64])    
+    config['decoder']['cnn']['lr'] = trial.suggest_float('cnn_lr', 1e-5, 0.1, log=True)
+    config['decoder']['cnn']['kernel_size'] = trial.suggest_categorical('kernel_size', [3, 5])
+    # config['decoder']['cnn']['kernel_size'] = 3
+    config['decoder']['cnn']['dropout'] = trial.suggest_float('dropout_cnn', 0.1, 0.5)
+    # config['decoder']['cnn']['dropout'] = 0.25
+    # chans = trial.suggest_categorical('channels', [6, 12])
+    chans = trial.suggest_categorical('channels', [4, 8, 10])
+    layers = trial.suggest_categorical('lay', [2, 3, 4])
+    config['decoder']['cnn']['channels'] = [chans]*layers
+
+    config['decoder']['scheduler']['cosine_restart_after'] = trial.suggest_categorical('restart_after', [40, 80, 160])
 
     return one_train(config, device)         
 
 
 def exp():    
-    study_name = 'results/only_decoding'  # Unique identifier of the study    
+    study_name = 'results/cosine'  # Unique identifier of the study    
+    config_global['dir']['results'] = 'results/cosine/'
     if not os.path.exists(study_name + '.db'):
         study = optuna.create_study(study_name=study_name, storage='sqlite:///' + study_name + '.db', direction="minimize")
     else:
         study = optuna.load_study(study_name=study_name, storage='sqlite:///' + study_name + '.db')
 
     # func = lambda trial: objective_rnn(trial, base_seed, study_name)
-    study.optimize(objective_mlp, n_trials=200)
+    study.optimize(objective_, n_trials=200)
     df = study.trials_dataframe()
     df.to_csv(open(study_name + ".csv", 'w'), index=False, header=True)
 

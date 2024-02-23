@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from decoder import LinearAccDecoder, CNNDecoder
+from decoder import LinearAccDecoder, CNNDecoder, CNNDecoderIndivdual
 from vae import VAE
 import os
 import utils
@@ -13,7 +13,7 @@ class Model(nn.Module):
         # dimensions
         z_dim, x_dim = config['dim_x_z'], config['dim_x_z']
         # vae        
-        self.vae = VAE(config, input_dim, z_dim, x_dim, neuron_bias)
+        self.vae = VAE(config, input_dim, z_dim, x_dim, neuron_bias)        
         # print num train params in vae
         print('Number of trainable parameters in VAE:', utils.count_parameters(self.vae))
         
@@ -26,7 +26,10 @@ class Model(nn.Module):
             self.behavior_decoder = LinearAccDecoder(config, x_dim)                        
             print('Number of trainable parameters in behavior decoder:', utils.count_parameters(self.behavior_decoder))
         elif behavior_decoder == 'cnn':
-            self.behavior_decoder = CNNDecoder(config, x_dim)
+            self.behavior_decoder = CNNDecoder(config, x_dim)            
+            print('Number of trainable parameters in behavior decoder:', utils.count_parameters(self.behavior_decoder))
+        elif behavior_decoder == 'cnn_indi':            
+            self.behavior_decoder = CNNDecoderIndivdual(config, x_dim)
             print('Number of trainable parameters in behavior decoder:', utils.count_parameters(self.behavior_decoder))
         else:
             self.behavior_decoder = None
@@ -50,20 +53,32 @@ class Model(nn.Module):
             behavior = None
         return y_recon, (mu, A), (z, x), behavior
 
-    def loss(self, y, y_recon, mu, A, z, x, behavior_pred, behavior_truth):
+    def loss(self, epoch, y, y_recon, mu, A, z, x, behavior_pred, behavior_truth):
         loss = self.vae.loss(y, y_recon, mu, A)
+        # loss = torch.tensor(0.0)
         loss_l = [loss.item()]
-        if self.behavior_decoder:              
+        if self.behavior_decoder:
             behave_loss = self.behavior_weight * self.behavior_decoder.loss(behavior_pred, behavior_truth, z)
             loss += behave_loss
             loss_l.append(behave_loss.item())
-        # smooth both x and z                
-        # for j in range(z.shape[0]):     
-        #     loss -= 0.1*gp_ll(z[j], length_scale=1.0, noise=1e-4)
-        #     loss -= 0.1*gp_ll(x[j], length_scale=1.0, noise=1e-4)
-        # loss -= 0.1*gp_ll(z, length_scale=1.0, noise=1e-4)
-        # loss -= 0.1*gp_ll(x, length_scale=1.0, noise=1e-4)
+        
         return loss, loss_l
+    
+    def optim_step(self):
+        self.vae.optimizer.step()
+        if self.behavior_decoder:
+            self.behavior_decoder.optimizer.step()
+
+    def scheduler_step(self):
+        # self.vae.optimizer.step()
+        if self.behavior_decoder:
+            self.behavior_decoder.scheduler.step()
+            # print(self.behavior_decoder.scheduler.get_lr())
+
+    def optim_zero_grad(self):
+        self.vae.optimizer.zero_grad()
+        if self.behavior_decoder:
+            self.behavior_decoder.optimizer.zero_grad()
         
     def save_model(self, save_prefix):
         """

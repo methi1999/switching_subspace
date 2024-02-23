@@ -44,6 +44,6 @@ class EarlyStopping:
             self.best_score = score
             if save_model:
                 model.save_model(save_prefix)
-            # self.trace_func('Found best')
+                self.trace_func('Saved best')
             self.counter = 0
             self.slow_down = False
