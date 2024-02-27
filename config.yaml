@@ -25,30 +25,37 @@ rnn:
   dropout: 0.15
   softmax_temp: 1
   lr: 0.01
-  weight_decay: 0
+  weight_decay: 0.0001
+
+  scheduler:
+    which: ''
+    cosine_restart_after: 120
+    const_factor: 0.95
 
 decoder:
   behavior_weight: 20
   stimulus_weight: 0
   choice_weight: 1
   which: 'cnn_indi'
-  # linear:
-  #   hidden_dims: [8, 8]
-  #   dropout: 0.1
-  #   lr: 0.0003
+  
+  linear:
+    hidden_dims: [8, 8]
+    dropout: 0.1
+    lr: 0.0003
+  
   cnn:
-    channels: [8, 8, 8]    
-    kernel_size: 3
-    dropout: 0.25
-    lr: 0.1
+    channels: [8, 8, 8]
+    kernel_size: 5
+    dropout: 0.2
+    lr: 0.003
     weight_decay: 0
   
   scheduler:
-    which: 'cosine'
-    cosine_restart_after: 100
+    which: ''
+    cosine_restart_after: 120
     const_factor: 0.95
 
-seed: 42
+seed: 7
 
 early_stop:
   patience: 50
@@ -58,4 +65,4 @@ early_stop:
 epochs: 2000
 test_every: 20
 plot_every: 5
-batch_size: 48
+batch_size: 192

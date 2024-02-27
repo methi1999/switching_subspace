@@ -33,8 +33,13 @@ class CNNDecoderIndivdual(nn.Module):
         # optimizer
         self.optimizer = torch.optim.Adam(self.parameters(), lr=config['decoder']['cnn']['lr'], weight_decay=config['decoder']['cnn']['weight_decay'])
         # self.scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=[60, 90, 120, 150, 180], gamma=0.5)
-        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optimizer, T_0=config['decoder']['scheduler']['cosine_restart_after'])
-        # self.scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=0.978)
+        if config['decoder']['scheduler']['which'] == 'cosine':
+            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optimizer, T_0=config['decoder']['scheduler']['cosine_restart_after'])
+        elif config['decoder']['scheduler']['which'] == 'decay':
+            self.scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=0.99)
+        else:
+            print('Scheduler not implemented for decoder')
+            self.scheduler = None
 
     def forward(self, x, z):
         # x is of shape (batch_size, seq_len, input_dim)        
@@ -53,9 +58,9 @@ class CNNDecoderIndivdual(nn.Module):
         # x_stim, x_choice = self.fc_stim(x_stim), self.fc_choice(x_choice)
         return torch.cat([x_stim, x_choice], dim=1)
 
-    def loss(self, predicted, ground_truth, z):
+    def loss(self, predicted, ground_truth, z, reduction='mean'):
         # bce loss
-        loss = nn.BCEWithLogitsLoss()
+        loss = nn.BCEWithLogitsLoss(reduction=reduction)
         stimulus_loss = loss(predicted[:, 0], ground_truth[:, 0])
         choice_loss = loss(predicted[:, 1], ground_truth[:, 1])        
         return self.stimulus_weight * stimulus_loss + choice_loss * self.choice_weight
@@ -146,6 +151,14 @@ class CNNDecoder(nn.Module):
         # optim
         self.optimizer = torch.optim.Adam(self.parameters(), lr=config['decoder']['cnn']['lr'], weight_decay=config['decoder']['cnn']['weight_decay'])
 
+        if config['decoder']['scheduler']['which'] == 'cosine':
+            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optimizer, T_0=config['decoder']['scheduler']['cosine_restart_after'])
+        elif config['decoder']['scheduler']['which'] == 'decay':
+            self.scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=0.99)
+        else:
+            print('Scheduler not implemented for decoder')
+            self.scheduler = None
+
     def forward(self, x, z):
         # x is of shape (batch_size, seq_len, input_dim)
         x = x * z
@@ -172,9 +185,9 @@ class CNNDecoder(nn.Module):
         # max pool across time
         return x
 
-    def loss(self, predicted, ground_truth, z):
+    def loss(self, predicted, ground_truth, z, reduction='mean'):
         # bce loss
-        loss = nn.BCEWithLogitsLoss()
+        loss = nn.BCEWithLogitsLoss(reduction=reduction)
         stimulus_loss = loss(predicted[:, 0], ground_truth[:, 0])
         choice_loss = loss(predicted[:, 1], ground_truth[:, 1])        
         return self.stimulus_weight * stimulus_loss + choice_loss * self.choice_weight

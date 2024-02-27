@@ -3,10 +3,11 @@
 #SBATCH --account=gts-awu36                   # account to which job is charged, ex: GT-gburdell3
 #SBATCH -J vae               # name of job
 #SBATCH -N1 --ntasks-per-node=4
-#SBATCH -q embers                     # job is submitted to inferno queue
+// #SBATCH -q embers                     # job is submitted to inferno queue
+#SBATCH -q inferno                     # job is submitted to inferno queue
 #SBATCH -oRes-%j.out
 #SBATCH --mail-type=ALL
-#SBATCH -t 0-08:00:00
+#SBATCH -t 0-23:59:00
 
 echo "Started on `/bin/hostname`" 
 echo $pwd

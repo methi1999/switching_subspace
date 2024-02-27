@@ -58,7 +58,7 @@ class Model(nn.Module):
         # loss = torch.tensor(0.0)
         loss_l = [loss.item()]
         if self.behavior_decoder:
-            behave_loss = self.behavior_weight * self.behavior_decoder.loss(behavior_pred, behavior_truth, z)
+            behave_loss = self.behavior_weight * self.behavior_decoder.loss(behavior_pred, behavior_truth, z)            
             loss += behave_loss
             loss_l.append(behave_loss.item())
         
@@ -70,10 +70,10 @@ class Model(nn.Module):
             self.behavior_decoder.optimizer.step()
 
     def scheduler_step(self):
-        # self.vae.optimizer.step()
-        if self.behavior_decoder:
-            self.behavior_decoder.scheduler.step()
-            # print(self.behavior_decoder.scheduler.get_lr())
+        if self.vae.scheduler:
+            self.vae.scheduler.step()
+        if self.behavior_decoder and self.behavior_decoder.scheduler:
+            self.behavior_decoder.scheduler.step()            
 
     def optim_zero_grad(self):
         self.vae.optimizer.zero_grad()

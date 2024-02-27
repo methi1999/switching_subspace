@@ -88,6 +88,17 @@ class VAE(nn.Module):
 
         assert self.neuron_bias is None and self.moving_average is None, "Not implemented"
 
+        if config['rnn']['scheduler']['which'] == 'cosine':
+            restart = config['rnn']['scheduler']['cosine_restart_after']
+            scheduler1 = torch.optim.lr_scheduler.ConstantLR(self.optimizer, factor=1, total_iters=restart)
+            scheduler2 = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optimizer, T_0=restart)
+            self.scheduler = torch.optim.lr_scheduler.SequentialLR(self.optimizer, schedulers=[scheduler1, scheduler2], milestones=[restart//2])
+        elif config['rnn']['scheduler']['which'] == 'decay':
+            scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=0.99)
+        else:
+            print('Scheduler not implemented for GRU')
+            self.scheduler = None
+
     def split(self, encoded):
         batch, seq, _ = encoded.shape
         mu = encoded[:, :, :self.z_dim+self.x_dim]
@@ -134,7 +145,8 @@ class VAE(nn.Module):
         # z = torch.sigmoid(z*self.sigmoid_scaling_factor)
         # z = torch.sigmoid(z)
         z = torch.nn.Softmax(dim=-1)(z/self.softmax_temp)                
-        # z = torch.nn.Tanh(dim=-1)(z/self.softmax_temp)                
+        # z = torch.nn.Tanh(dim=-1)(z/self.softmax_temp)
+        # x = torch.nn.Tanh()(x)
         
         # map x to observation        
         Cx_list = [self.linear_maps[i](x[:, :, i:i+1]) for i in range(self.x_dim)]

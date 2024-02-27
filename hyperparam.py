@@ -83,9 +83,10 @@ def train(config, model, train_loader, val_loader):
             model.optim_zero_grad()
             loss.backward()
             model.optim_step()
-            model.scheduler_step()
+            
             epoch_loss += np.array(loss_l)
         train_losses.append((epoch, epoch_loss/len(train_loader)))
+        model.scheduler_step()
         # test loss
         if (epoch+1) % test_every == 0:            
             test_loss = test(model, val_loader)
@@ -116,14 +117,14 @@ def train(config, model, train_loader, val_loader):
     
     # compute median of test loss in a window of 15
     meds = []
-    window = 20
-    only_test_loss = [float('inf')]*(window) + only_test_loss + [float('inf')]*(window)
+    window = 50
+    only_test_loss = [np.nan]*(window) + only_test_loss + [np.nan]*(window)
     for i in range(window, len(only_test_loss)-window):
-        meds.append(np.median(only_test_loss[i-window:i+window]))
+        meds.append(np.nanmean(only_test_loss[i-window:i+window]))
     return np.min(meds), train_losses, test_losses
 
 
-def one_train(config, device):    
+def one_train(config, device):        
     # create model and optimizer
     model = Model(config, input_dim=emissions_dim)
     # create dataloaders
@@ -144,25 +145,34 @@ def one_train(config, device):
 # create optuna function
 def objective_(trial):
     config = deepcopy(config_global)
+    # config['rnn']['hidden_size'] = trial.suggest_categorical('hidden_size', [24, 32, 48])
     config['rnn']['hidden_size'] = trial.suggest_categorical('hidden_size', [24, 32, 48])
     # config['rnn']['num_layers'] = trial.suggest_categorical('num_layers', [1, 2])        
     config['rnn']['num_layers'] = 1       
     # config['rnn']['dropout'] = trial.suggest_float('dropout', 0.1, 0.5)
     config['rnn']['dropout'] = 0.15
     config['batch_size'] = trial.suggest_categorical('batch_size', [32, 48, 64])    
-    config['decoder']['cnn']['lr'] = trial.suggest_float('cnn_lr', 1e-5, 0.1, log=True)
-    config['decoder']['cnn']['kernel_size'] = trial.suggest_categorical('kernel_size', [3, 5])
-    # config['decoder']['cnn']['kernel_size'] = 3
+    # config['batch_size'] = 48
+    # config['decoder']['cnn']['lr'] = trial.suggest_float('cnn_lr', 1e-5, 0.1, log=True)
+    config['decoder']['cnn']['lr'] = trial.suggest_float('cnn_lr', 1e-3, 1, log=True)
+    
+    config['decoder']['cnn']['kernel_size'] = trial.suggest_categorical('kernel_size', [5, 7, 9])        
     config['decoder']['cnn']['dropout'] = trial.suggest_float('dropout_cnn', 0.1, 0.5)
     # config['decoder']['cnn']['dropout'] = 0.25
     # chans = trial.suggest_categorical('channels', [6, 12])
-    chans = trial.suggest_categorical('channels', [4, 8, 10])
-    layers = trial.suggest_categorical('lay', [2, 3, 4])
+    chans = trial.suggest_categorical('channels', [4, 8, 16])
+    # chans = 8
+    layers = trial.suggest_categorical('lay', [3, 5, 7])
     config['decoder']['cnn']['channels'] = [chans]*layers
+    
+    if config['decoder']['scheduler']['which'] == 'cosine':
+        config['decoder']['scheduler']['cosine_restart_after'] = trial.suggest_categorical('restart_after', [40, 80, 120])    
 
-    config['decoder']['scheduler']['cosine_restart_after'] = trial.suggest_categorical('restart_after', [40, 80, 160])
-
-    return one_train(config, device)         
+    res = []
+    for _ in range(5):
+        utils.set_seeds(np.random.randint(1000))
+        res.append(one_train(config, device))
+    return np.mean(res)    
 
 
 def exp():    
@@ -174,7 +184,7 @@ def exp():
         study = optuna.load_study(study_name=study_name, storage='sqlite:///' + study_name + '.db')
 
     # func = lambda trial: objective_rnn(trial, base_seed, study_name)
-    study.optimize(objective_, n_trials=200)
+    # study.optimize(objective_, n_trials=800)
     df = study.trials_dataframe()
     df.to_csv(open(study_name + ".csv", 'w'), index=False, header=True)
 

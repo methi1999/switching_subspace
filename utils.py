@@ -32,6 +32,7 @@ def plot_curve(model, config, train_losses, test_losses):
     plt.title('Train and Test Loss')
     ax1.legend(loc='upper left')
     ax2.legend(loc='upper right')
+    # ax2.set_yscale('log')
     # plt.show()
     plt.savefig(os.path.join(model_store_path(config, model.arch_name), 'train_test_loss.png'))
 
