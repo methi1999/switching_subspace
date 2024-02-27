@@ -11,9 +11,9 @@ class Model(nn.Module):
         super().__init__()
         self.config = config
         # dimensions
-        z_dim, x_dim = config['dim_x_z'], config['dim_x_z']
+        xz_list = config['dim_x_z']
         # vae        
-        self.vae = VAE(config, input_dim, z_dim, x_dim, neuron_bias)        
+        self.vae = VAE(config, input_dim, xz_list, neuron_bias)        
         # print num train params in vae
         print('Number of trainable parameters in VAE:', utils.count_parameters(self.vae))
         
@@ -23,13 +23,13 @@ class Model(nn.Module):
         self.behavior_weight = behavior_weight
             
         if behavior_decoder == 'linear':            
-            self.behavior_decoder = LinearAccDecoder(config, x_dim)                        
+            self.behavior_decoder = LinearAccDecoder(config, xz_list)                        
             print('Number of trainable parameters in behavior decoder:', utils.count_parameters(self.behavior_decoder))
         elif behavior_decoder == 'cnn':
-            self.behavior_decoder = CNNDecoder(config, x_dim)            
+            self.behavior_decoder = CNNDecoder(config, xz_list)            
             print('Number of trainable parameters in behavior decoder:', utils.count_parameters(self.behavior_decoder))
         elif behavior_decoder == 'cnn_indi':            
-            self.behavior_decoder = CNNDecoderIndivdual(config, x_dim)
+            self.behavior_decoder = CNNDecoderIndivdual(config, xz_list)
             print('Number of trainable parameters in behavior decoder:', utils.count_parameters(self.behavior_decoder))
         else:
             self.behavior_decoder = None
@@ -54,6 +54,13 @@ class Model(nn.Module):
         return y_recon, (mu, A), (z, x), behavior
 
     def loss(self, epoch, y, y_recon, mu, A, z, x, behavior_pred, behavior_truth):
+        # check if batch dimensions of y_recon and y are same. If not, repeat y and behavior truth n times        
+        # if y.size(0) != y_recon.size(0):
+        #     repeat_factor = y_recon.size(0)//behavior_truth.size(0)
+        #     y = y.repeat(repeat_factor, 1, 1)
+        #     A = A.repeat(repeat_factor, 1, 1, 1)
+        #     mu = mu.repeat(repeat_factor, 1, 1)
+        #     behavior_truth = behavior_truth.repeat(repeat_factor, 1)        
         loss = self.vae.loss(y, y_recon, mu, A)
         # loss = torch.tensor(0.0)
         loss_l = [loss.item()]

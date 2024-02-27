@@ -8,11 +8,17 @@ import os
 eps = 1e-6
 
 class VAE(nn.Module):
-    def __init__(self, config, input_dim, z_dim, x_dim, neuron_bias=None, init='vae_2_32_1_bi_standard'):
-        super().__init__()
-        self.z_dim, self.x_dim = z_dim, x_dim        
-        assert x_dim == z_dim
-        output_dim = (z_dim + x_dim)*(z_dim + x_dim + 1)
+    def __init__(self, config, input_dim, xz_list, neuron_bias=None, init='vae_2_32_1_bi_standard'):
+        super().__init__()               
+        # keep only non-zero values in xz_list
+        xz_list = [x for x in xz_list if x > 0]
+        self.xz_ends = torch.cumsum(torch.tensor(xz_list), dim=0)
+        self.xz_starts = torch.tensor([0] + self.xz_ends.tolist()[:-1])
+        self.xz_l = list(zip(self.xz_starts, self.xz_ends))
+        
+        self.x_dim = sum(xz_list)
+        self.z_dim = len(xz_list)
+        output_dim = (self.z_dim + self.x_dim)*(self.z_dim + self.x_dim + 1)
 
         hidden_dim, num_layers = config['rnn']['hidden_size'], config['rnn']['num_layers']
         bidirectional = config['rnn']['bidirectional']
@@ -33,7 +39,7 @@ class VAE(nn.Module):
         # self.posterior = nn.Linear(hidden_dim, output_dim)
         
         # reconstruction
-        self.linear_maps = nn.ModuleList([nn.Linear(1, input_dim) for _ in range(x_dim)])        
+        self.linear_maps = nn.ModuleList([nn.Linear(i, input_dim) for i in xz_list])        
 
         # reconstruction_layers = nn.Sequential(nn.Linear(1, 32), nn.Tanh(),
         #                                       nn.Linear(32, 32), nn.ReLU(),
@@ -59,7 +65,7 @@ class VAE(nn.Module):
         self.softmax_temp = config['rnn']['softmax_temp']
 
         # name model
-        self.arch_name = 'vae_{}_{}_{}'.format(z_dim, hidden_dim, num_layers)
+        self.arch_name = 'vae_{}_{}_{}'.format(xz_list, hidden_dim, num_layers)
         if bidirectional:
             self.arch_name += '_bi'
         if neuron_bias is not None:
@@ -73,18 +79,18 @@ class VAE(nn.Module):
         # optmizer
         self.optimizer = torch.optim.Adam(self.parameters(), lr=config['rnn']['lr'], weight_decay=config['rnn']['weight_decay'])        
 
-        # # init model        
-        # if init is not None:
-        #     try:
-        #         data_des = 'dandi_{}/{}_ms'.format(config['shape_dataset']['id'], int(config['shape_dataset']['win_len']*1000))
-        #         pth = os.path.join(config['dir']['results'], data_des, init, 'best')
-        #         checkpoint = torch.load(pth, map_location=lambda storage, loc: storage)
-        #         # replace encoder in keys with nothing
-        #         checkpoint['model_state_dict'] = {k.replace('vae.', ''): v for k, v in checkpoint['model_state_dict'].items()}
-        #         self.load_state_dict(checkpoint['model_state_dict'])
-        #         print("Loading from pre-trained")
-        #     except:
-        #         print("Failed to load pre-trained")
+        # init model        
+        if init is not None:
+            try:
+                data_des = 'dandi_{}/{}_ms'.format(config['shape_dataset']['id'], int(config['shape_dataset']['win_len']*1000))
+                pth = os.path.join(config['dir']['results'], data_des, init, 'best')
+                checkpoint = torch.load(pth, map_location=lambda storage, loc: storage)
+                # replace encoder in keys with nothing
+                checkpoint['model_state_dict'] = {k.replace('vae.', ''): v for k, v in checkpoint['model_state_dict'].items()}
+                self.load_state_dict(checkpoint['model_state_dict'])
+                print("Loading from pre-trained")
+            except:
+                print("Failed to load pre-trained")
 
         assert self.neuron_bias is None and self.moving_average is None, "Not implemented"
 
@@ -115,7 +121,7 @@ class VAE(nn.Module):
         sample = (mu_flat + torch.bmm(A_flat, eps)).squeeze(-1)        
         return sample.view(batch, seq, mu_dim)
 
-    def forward(self, y):
+    def forward(self, y, ret_n=1):
         # y is of shape (batch_size, seq_len, input_dim)
         # batch, seq, input_dim = y.shape
         encoded, _ = self.encoder(y)
@@ -139,6 +145,8 @@ class VAE(nn.Module):
         
         # sample z and x
         sample_zx = self.reparameterize(mu, A)
+        # sample z and x 10 times and concatenate along batch
+        # sample_zx = torch.cat([self.reparameterize(mu, A) for _ in range(10)], dim=0)
         
         # extract x and z
         z, x = sample_zx[:, :, :self.z_dim], sample_zx[:, :, self.z_dim:]
@@ -148,12 +156,12 @@ class VAE(nn.Module):
         # z = torch.nn.Tanh(dim=-1)(z/self.softmax_temp)
         # x = torch.nn.Tanh()(x)
         
-        # map x to observation        
-        Cx_list = [self.linear_maps[i](x[:, :, i:i+1]) for i in range(self.x_dim)]
+        # map x to observation
+        Cx_list = [self.linear_maps[i](x[:, :, s: e]) for i, (s, e) in enumerate(self.xz_l)]
         # if any element is a tuple, take the first element
         # Cx_list = [self.linear2(Cx[0]) if isinstance(Cx, tuple) else Cx for Cx in Cx_list]
         # print([x.shape for x in Cx_list])
-        Cx = torch.stack(Cx_list, dim=-1)        
+        Cx = torch.stack(Cx_list, dim=-1)
         y_recon = torch.sum(Cx * z.unsqueeze(2), dim=3)        
 
         # if self.neuron_bias is not None:
