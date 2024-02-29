@@ -24,7 +24,7 @@ class VAE(nn.Module):
         bidirectional = config['rnn']['bidirectional']
         dropout = config['rnn']['dropout']
 
-        # self.encoder = nn.Sequential(nn.Linear(input_dim, hidden_dim))
+        # self.encoder = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.Tanh())
         # self.posterior = nn.Linear(hidden_dim, output_dim)
 
         # self.encoder = nn.RNN(input_dim, hidden_dim, num_layers=num_layers, batch_first=True,
@@ -100,7 +100,7 @@ class VAE(nn.Module):
             scheduler2 = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optimizer, T_0=restart)
             self.scheduler = torch.optim.lr_scheduler.SequentialLR(self.optimizer, schedulers=[scheduler1, scheduler2], milestones=[restart//2])
         elif config['rnn']['scheduler']['which'] == 'decay':
-            scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=0.99)
+            self.scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=0.97)
         else:
             print('Scheduler not implemented for GRU')
             self.scheduler = None
@@ -121,7 +121,7 @@ class VAE(nn.Module):
         sample = (mu_flat + torch.bmm(A_flat, eps)).squeeze(-1)        
         return sample.view(batch, seq, mu_dim)
 
-    def forward(self, y, ret_n=1):
+    def forward(self, y):
         # y is of shape (batch_size, seq_len, input_dim)
         # batch, seq, input_dim = y.shape
         encoded, _ = self.encoder(y)
@@ -190,8 +190,8 @@ class VAE(nn.Module):
         
         return (recon_loss + kl_loss)/batch
 
-    def sample(self, y, n=10):
-        return [self.forward(y) for _ in range(n)]    
+    def sample(self, y, n):
+        return [self.forward(y) for _ in range(n)]
     
 
 class PositionalEncoding(nn.Module):

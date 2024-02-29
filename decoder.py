@@ -123,8 +123,10 @@ class CNNDecoderIndivdual(nn.Module):
         # self.scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=[60, 90, 120, 150, 180], gamma=0.5)
         if config['decoder']['scheduler']['which'] == 'cosine':
             self.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optimizer, T_0=config['decoder']['scheduler']['cosine_restart_after'])
+            print('Using cosine annealing for decoder')
         elif config['decoder']['scheduler']['which'] == 'decay':
-            self.scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=0.99)
+            self.scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=config['decoder']['scheduler']['const_factor'])
+            print('Using decay annealing for decoder')
         else:
             print('Scheduler not implemented for decoder')
             self.scheduler = None
@@ -138,7 +140,8 @@ class CNNDecoderIndivdual(nn.Module):
             x_stim = x[:, :self.stim_dim, :]
             x_stim = self.conv_stim(x_stim)
             x_stim = x_stim * z[:, 0:1, :]
-            x_stim = torch.max(x_stim, dim=2).values
+            # x_stim = torch.max(x_stim, dim=2).values
+            x_stim = torch.mean(x_stim, dim=2)
         else:
             x_stim = torch.zeros(x.size(0), 1)
         
@@ -146,7 +149,8 @@ class CNNDecoderIndivdual(nn.Module):
             x_choice = x[:, self.stim_dim:self.stim_dim+self.choice_dim, :]            
             x_choice = self.conv_choice(x_choice)            
             x_choice = x_choice * z[:, self.choice_idx:self.choice_idx+1, :]
-            x_choice = torch.max(x_choice, dim=2).values
+            # x_choice = torch.max(x_choice, dim=2).values
+            x_choice = torch.mean(x_choice, dim=2)
         else:
             x_choice = torch.zeros(x.size(0), 1)
                 

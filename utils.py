@@ -71,7 +71,8 @@ def set_seeds(seed):
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    # torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.benchmark = True    
 
     
 def neg_log_likelihood(rates, spikes, zero_warning=True):

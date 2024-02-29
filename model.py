@@ -84,11 +84,12 @@ class Model(nn.Module):
         if self.behavior_decoder:
             self.behavior_decoder.optimizer.step()
 
-    def scheduler_step(self):
+    def scheduler_step(self, epoch):
         if self.vae.scheduler:
             self.vae.scheduler.step()
-        if self.behavior_decoder and self.behavior_decoder.scheduler:
+        if epoch > 100 and self.behavior_decoder and self.behavior_decoder.scheduler:
             self.behavior_decoder.scheduler.step()            
+            # print("LR: ", self.behavior_decoder.scheduler.get_lr())
 
     def optim_zero_grad(self):
         self.vae.optimizer.zero_grad()
