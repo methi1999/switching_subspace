@@ -15,7 +15,7 @@ shape_dataset:
   win_len: 0.1
 
 # mention x for stimulus, choice and rest
-dim_x_z: [2, 2, 2]
+dim_x_z: [0, 1, 1]
 
 
 rnn:  
@@ -40,11 +40,17 @@ decoder:
   which: 'cnn_indi'  
   
   cnn:
-    channels: [8, 8, 8]
+    channels: [8, 8]
     kernel_size: 5
     dropout: 0.2
-    lr: 0.001
+    lr: 0.003
     weight_decay: 0
+
+  rnn:
+    layers: 1
+    hidden_dim: 8
+    lr: 0.001
+    dropout: 0.3
   
   scheduler:
     which: ''

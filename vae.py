@@ -190,10 +190,9 @@ class VAE(nn.Module):
         
         return (recon_loss + kl_loss)/batch
 
-    # def generate(self, num_samples):
-    #     return self.sample(num_samples).detach().numpy()
+    def sample(self, y, n=10):
+        return [self.forward(y) for _ in range(n)]    
     
-
 
 class PositionalEncoding(nn.Module):
 

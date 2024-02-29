@@ -2,10 +2,88 @@ import torch
 import torch.nn as nn
 
 
+class RNNDecoderIndivdual(nn.Module):
+    def __init__(self, config, xz_list):
+        super().__init__()
+        self.stim_dim, self.choice_dim = xz_list[0], xz_list[1]        
+        self.choice_idx = 0
+        if self.stim_dim > 0:
+            self.choice_idx += 1
+
+        layers = config['decoder']['rnn']['layers']
+        hidden_dim = config['decoder']['rnn']['hidden_dim']        
+        dropout = config['decoder']['rnn']['dropout']
+
+        rnn_l = nn.RNN(input_size=1, hidden_size=hidden_dim, num_layers=layers, dropout=dropout, batch_first=True)
+        final_linear = nn.Linear(hidden_dim, 1)
+        def make_module():
+            return nn.ModuleList([rnn_l, final_linear])
+        
+        if self.stim_dim > 0:
+            self.stimulus_weight = config['decoder']['stimulus_weight']
+            self.rnn_stim = make_module()
+            print("Using stimulus decoder")
+        else:
+            self.rnn_stim = None      
+        if self.choice_dim > 0:
+            self.choice_weight = config['decoder']['choice_weight']
+            self.rnn_choice = make_module()
+            print("Using choice decoder")
+        else:
+            self.rnn_choice = None                                
+        # name
+        self.arch_name = 'rnn_{}_{}'.format(layers, hidden_dim)
+        # optimizer
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=config['decoder']['cnn']['lr'], weight_decay=config['decoder']['cnn']['weight_decay'])
+        # self.scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=[60, 90, 120, 150, 180], gamma=0.5)
+        if config['decoder']['scheduler']['which'] == 'cosine':
+            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optimizer, T_0=config['decoder']['scheduler']['cosine_restart_after'])
+        elif config['decoder']['scheduler']['which'] == 'decay':
+            self.scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=0.99)
+        else:
+            print('Scheduler not implemented for decoder')
+            self.scheduler = None
+
+    def forward(self, x, z):
+        # x is of shape (batch_size, seq_len, input_dim)
+        if self.rnn_stim:
+            x_stim = x[:, :, :self.stim_dim]
+            x_stim, _ = self.rnn_stim[0](x_stim)
+            x_stim = x_stim * z[:, :, 0:1]
+            x_stim = self.rnn_stim[1](x_stim)
+            x_stim = torch.max(x_stim, dim=2)            
+        else:
+            x_stim = torch.zeros(x.size(0), 1)
+        
+        if self.rnn_choice:
+            x_choice = x[:, :, :self.choice_dim]            
+            x_choice, _ = self.rnn_choice[0](x_choice)
+            x_choice = x_choice * z[:, :, 0:1]
+            x_choice = self.rnn_choice[1](x_choice)
+            x_choice = torch.max(x_choice, dim=1)            
+        else:
+            x_choice = torch.zeros(x.size(0), 1)
+                
+        return torch.cat([x_stim, x_choice], dim=1)        
+
+    def loss(self, predicted, ground_truth, z, reduction='mean'):
+        # bce loss
+        loss_fn = nn.BCEWithLogitsLoss(reduction=reduction)
+        loss = 0
+        if self.rnn_stim:
+            loss += loss_fn(predicted[:, 0], ground_truth[:, 0]) * self.stimulus_weight            
+        if self.rnn_choice:
+            loss += loss_fn(predicted[:, 1], ground_truth[:, 1]) * self.choice_weight        
+        return loss
+
+
 class CNNDecoderIndivdual(nn.Module):
     def __init__(self, config, xz_list):
         super().__init__()
         self.stim_dim, self.choice_dim = xz_list[0], xz_list[1]        
+        self.choice_idx = 0
+        if self.stim_dim > 0:
+            self.choice_idx += 1
 
         channels = config['decoder']['cnn']['channels']
         kernel_size = config['decoder']['cnn']['kernel_size']
@@ -63,10 +141,11 @@ class CNNDecoderIndivdual(nn.Module):
             x_stim = torch.max(x_stim, dim=2).values
         else:
             x_stim = torch.zeros(x.size(0), 1)
+        
         if self.conv_choice:
-            x_choice = x[:, self.stim_dim:self.stim_dim+self.choice_dim, :]
-            x_choice = self.conv_choice(x_choice)
-            x_choice = x_choice * z[:, 1:2, :]
+            x_choice = x[:, self.stim_dim:self.stim_dim+self.choice_dim, :]            
+            x_choice = self.conv_choice(x_choice)            
+            x_choice = x_choice * z[:, self.choice_idx:self.choice_idx+1, :]
             x_choice = torch.max(x_choice, dim=2).values
         else:
             x_choice = torch.zeros(x.size(0), 1)
@@ -78,7 +157,7 @@ class CNNDecoderIndivdual(nn.Module):
         loss_fn = nn.BCEWithLogitsLoss(reduction=reduction)
         loss = 0
         if self.conv_stim:
-            loss += loss_fn(predicted[:, 0], ground_truth[:, 0]) * self.stimulus_weight
+            loss += loss_fn(predicted[:, 0], ground_truth[:, 0]) * self.stimulus_weight            
         if self.conv_choice:
             loss += loss_fn(predicted[:, 1], ground_truth[:, 1]) * self.choice_weight        
         return loss

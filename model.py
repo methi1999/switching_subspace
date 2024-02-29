@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from decoder import LinearAccDecoder, CNNDecoder, CNNDecoderIndivdual
+from decoder import LinearAccDecoder, CNNDecoder, CNNDecoderIndivdual, RNNDecoderIndivdual
 from vae import VAE
 import os
 import utils
@@ -31,6 +31,8 @@ class Model(nn.Module):
         elif behavior_decoder == 'cnn_indi':            
             self.behavior_decoder = CNNDecoderIndivdual(config, xz_list)
             print('Number of trainable parameters in behavior decoder:', utils.count_parameters(self.behavior_decoder))
+        elif behavior_decoder == 'rnn':
+            self.behavior_decoder = RNNDecoderIndivdual(config, xz_list)
         else:
             self.behavior_decoder = None
             self.behavior_weight = 0        
@@ -53,16 +55,9 @@ class Model(nn.Module):
             behavior = None
         return y_recon, (mu, A), (z, x), behavior
 
-    def loss(self, epoch, y, y_recon, mu, A, z, x, behavior_pred, behavior_truth):
-        # check if batch dimensions of y_recon and y are same. If not, repeat y and behavior truth n times        
-        # if y.size(0) != y_recon.size(0):
-        #     repeat_factor = y_recon.size(0)//behavior_truth.size(0)
-        #     y = y.repeat(repeat_factor, 1, 1)
-        #     A = A.repeat(repeat_factor, 1, 1, 1)
-        #     mu = mu.repeat(repeat_factor, 1, 1)
-        #     behavior_truth = behavior_truth.repeat(repeat_factor, 1)        
-        loss = self.vae.loss(y, y_recon, mu, A)
+    def loss(self, epoch, y, y_recon, mu, A, z, x, behavior_pred, behavior_truth):       
         # loss = torch.tensor(0.0)
+        loss = self.vae.loss(y, y_recon, mu, A)
         loss_l = [loss.item()]
         if self.behavior_decoder:
             behave_loss = self.behavior_weight * self.behavior_decoder.loss(behavior_pred, behavior_truth, z)            
@@ -70,6 +65,19 @@ class Model(nn.Module):
             loss_l.append(behave_loss.item())
         
         return loss, loss_l
+        
+    def sample(self, y, n_samples):
+        samples_vae = self.vae.sample(y, n_samples)
+        # if behavior decoder is present, sample behavior as well
+        if self.behavior_decoder:
+            samples_behavior = []
+            for i in range(n_samples):
+                _, _, (z, x) = samples_vae[i]
+                behavior = self.behavior_decoder(x, z)
+                samples_behavior.append(behavior)
+            return samples_vae, samples_behavior
+        else:
+            return samples_vae, [None for _ in range(n_samples)]
     
     def optim_step(self):
         self.vae.optimizer.step()
