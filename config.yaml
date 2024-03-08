@@ -16,25 +16,25 @@ shape_dataset:
 
 # mention x for stimulus, choice and rest
 # dim_x_z: [2, 0, 1]
-dim_x_z: [0, 1, 1]
+dim_x_z: [0, 0, 1, 1]
 # dim_x_z: [0, 0, 1, 1, 1, 1]
 
 z_prior:
-  include: True
+  include: False
   weights: [100, 0]
   # means and stds multipled by number of bins  
   means: [0, 1]
   stds: [0.2, 1]
-  learn: False
-  prior_on_mean: True
+  learn: True
+  prior_on_mean: False
 
 
 rnn:  
   # rnn_type: 'GRU'
   bidirectional: True
-  hidden_size: 8
-  num_layers: 1
-  dropout: 0.2
+  hidden_size: 16
+  num_layers: 2
+  dropout: 0.1
   softmax_temp: 1
   lr: 0.01
   weight_decay: 0
@@ -50,14 +50,14 @@ decoder:
   stimulus_weight: 1
   choice_weight: 0.5
   
-  which: 'cnn_indi'
-  # which: ''
+  # which: 'cnn_indi'
+  which: ''
   train_decoder_after: 0
   
   cnn:
     # channels: [4, 4, 4, 4, 4, 4]
     channels: [4]
-    kernel_size: 7
+    kernel_size: 9
     dropout: 0.3
     lr: 0.003
     weight_decay: 0

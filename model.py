@@ -64,7 +64,7 @@ class Model(nn.Module):
             os.makedirs(self.final_path)
     
     def forward(self, spikes):
-        y_recon, (mu, A), (z, x) = self.vae(spikes)        
+        y_recon, (mu, A), (z, x) = self.vae(spikes)
         if self.behavior_decoder:
             behavior = self.behavior_decoder(x, z)
             # behavior = self.behavior_decoder(mu[:, :, self.vae.z_dim:], mu[:, :, :self.vae.z_dim])
