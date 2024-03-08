@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from decoder import LinearAccDecoder
-from gp import moving_average
+from priors import moving_average
 import math
 import os
 
@@ -12,9 +12,11 @@ class VAE(nn.Module):
         super().__init__()               
         # keep only non-zero values in xz_list
         xz_list = [x for x in xz_list if x > 0]
-        self.xz_ends = torch.cumsum(torch.tensor(xz_list), dim=0)
-        self.xz_starts = torch.tensor([0] + self.xz_ends.tolist()[:-1])
-        self.xz_l = list(zip(self.xz_starts, self.xz_ends))
+        xz_ends = torch.cumsum(torch.tensor(xz_list), dim=0)
+        xz_starts = torch.tensor([0] + xz_ends.tolist()[:-1])
+        xz_l = torch.stack([xz_starts, xz_ends], dim=1)
+        # register as a buffer
+        self.register_buffer('xz_l', xz_l)
         
         self.x_dim = sum(xz_list)
         self.z_dim = len(xz_list)
@@ -24,7 +26,7 @@ class VAE(nn.Module):
         bidirectional = config['rnn']['bidirectional']
         dropout = config['rnn']['dropout']
 
-        # self.encoder = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.Tanh())
+        # self.encoder = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.LeakyReLU(), nn.Linear(hidden_dim, hidden_dim))
         # self.posterior = nn.Linear(hidden_dim, output_dim)
 
         # self.encoder = nn.RNN(input_dim, hidden_dim, num_layers=num_layers, batch_first=True,
@@ -75,28 +77,31 @@ class VAE(nn.Module):
         self.moving_average = None
         if self.moving_average is not None:
             self.arch_name += '_average_'+str(self.moving_average)
+            print('Using moving average of', self.moving_average)
+        else:
+            print('Not using moving average')
         
         # optmizer
         self.optimizer = torch.optim.Adam(self.parameters(), lr=config['rnn']['lr'], weight_decay=config['rnn']['weight_decay'])        
 
-        # init model        
-        if init is not None:
-            try:
-                data_des = 'dandi_{}/{}_ms'.format(config['shape_dataset']['id'], int(config['shape_dataset']['win_len']*1000))
-                pth = os.path.join(config['dir']['results'], data_des, init, 'best')
-                checkpoint = torch.load(pth, map_location=lambda storage, loc: storage)
-                # replace encoder in keys with nothing
-                checkpoint['model_state_dict'] = {k.replace('vae.', ''): v for k, v in checkpoint['model_state_dict'].items()}
-                self.load_state_dict(checkpoint['model_state_dict'])
-                print("Loading from pre-trained")
-            except:
-                print("Failed to load pre-trained")
+        # # init model        
+        # if init is not None:
+        #     try:
+        #         data_des = 'dandi_{}/{}_ms'.format(config['shape_dataset']['id'], int(config['shape_dataset']['win_len']*1000))
+        #         pth = os.path.join(config['dir']['results'], data_des, init, 'best')
+        #         checkpoint = torch.load(pth, map_location=lambda storage, loc: storage)
+        #         # replace encoder in keys with nothing
+        #         checkpoint['model_state_dict'] = {k.replace('vae.', ''): v for k, v in checkpoint['model_state_dict'].items()}
+        #         self.load_state_dict(checkpoint['model_state_dict'])
+        #         print("Loading from pre-trained")
+        #     except:
+        #         print("Failed to load pre-trained")
 
         assert self.neuron_bias is None and self.moving_average is None, "Not implemented"
 
         if config['rnn']['scheduler']['which'] == 'cosine':
             restart = config['rnn']['scheduler']['cosine_restart_after']
-            scheduler1 = torch.optim.lr_scheduler.ConstantLR(self.optimizer, factor=1, total_iters=restart)
+            scheduler1 = torch.optim.lr_scheduler.ConstantLR(self.optimizer, factor=1, total_iters=restart+restart//2)
             scheduler2 = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optimizer, T_0=restart)
             self.scheduler = torch.optim.lr_scheduler.SequentialLR(self.optimizer, schedulers=[scheduler1, scheduler2], milestones=[restart//2])
         elif config['rnn']['scheduler']['which'] == 'decay':
@@ -135,9 +140,11 @@ class VAE(nn.Module):
         # # smooth means        
         # if self.moving_average is not None:
         #     # both
-        #     # mu = moving_average(mu, self.moving_average)
+        #     mu = moving_average(mu, self.moving_average)
         #     # only z
-        #     mu[:, :, :self.z_dim] = moving_average(mu[:, :, :self.z_dim], self.moving_average)
+        #     # mu[:, :, :self.z_dim] = moving_average(mu[:, :, :self.z_dim], self.moving_average)
+        #     # only x
+        #     # mu[:, :, self.z_dim:] = moving_average(mu[:, :, self.z_dim:], self.moving_average)
 
         # accumulate
         # mu = mu - mu[:, 0:1, :] # first is 0
@@ -161,7 +168,7 @@ class VAE(nn.Module):
         # if any element is a tuple, take the first element
         # Cx_list = [self.linear2(Cx[0]) if isinstance(Cx, tuple) else Cx for Cx in Cx_list]
         # print([x.shape for x in Cx_list])
-        Cx = torch.stack(Cx_list, dim=-1)
+        Cx = torch.stack(Cx_list, dim=-1)        
         y_recon = torch.sum(Cx * z.unsqueeze(2), dim=3)        
 
         # if self.neuron_bias is not None:

@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from model import Model
 import utils
 from early_stopping import EarlyStopping
-from gp import moving_average
+from priors import moving_average
 
 import torch
 from torch.utils.data import DataLoader, TensorDataset

@@ -14,8 +14,8 @@ import utils
 
 only_look_at_decoder = False
 
-# is_cuda = torch.cuda.is_available()
-is_cuda = False
+is_cuda = torch.cuda.is_available()
+# is_cuda = False
 # if we have a GPU available, we'll set our device to GPU
 if is_cuda:
     device = torch.device("cuda")
@@ -42,7 +42,9 @@ spikes = torch.tensor(spikes).float()
 # create dataloader with random sampling for training and testing
 # split data into training and testing
 behaviour_data_train, behaviour_data_test, spikes_train, spikes_test = train_test_split(behaviour_data, spikes, test_size=0.3, random_state=42)
-
+# transfer to device
+behaviour_data_train, behaviour_data_test = behaviour_data_train.to(device), behaviour_data_test.to(device)
+spikes_train, spikes_test = spikes_train.to(device), spikes_test.to(device)
 # create dataloaders
 train_dataset = TensorDataset(behaviour_data_train, spikes_train)
 test_dataset = TensorDataset(behaviour_data_test, spikes_test)
@@ -52,19 +54,26 @@ test_dataset = TensorDataset(behaviour_data_test, spikes_test)
 neuron_bias = torch.mean(spikes_train, dim=0)
 
 
-def test(model, test_loader):
+def test(model: Model, test_loader, n_samples=200):
     model.eval()
     test_loss = 0
     with torch.no_grad():
         for _, (behavior_batch, spikes_batch) in enumerate(test_loader):
-            y_recon, (mu, A), (z, x), behavior_batch_pred = model(spikes_batch)
-            _, loss_l = model.loss(None, spikes_batch, y_recon, mu, A, z, x, behavior_batch_pred, behavior_batch)
-            test_loss += np.array(loss_l)
+            samples_xz, samples_behavior = model.sample(spikes_batch, n_samples=n_samples)
+            # l = []
+            for i in range(len(samples_xz)):
+                y_recon, (mu, A), (z, x) = samples_xz[i]
+                behavior_batch_pred = samples_behavior[i]
+                # calculate loss
+                _, loss_l = model.loss(None, spikes_batch, y_recon, mu, A, z, x, behavior_batch_pred, behavior_batch)
+                # l.append(loss_l[1])
+                test_loss += np.array(loss_l)            
+            # print(np.mean(l), np.std(l))
     # divide loss by total number of samples in dataloader    
-    return test_loss/len(test_loader)
+    return test_loss/(len(test_loader) * n_samples)
 
 
-def train(config, model, train_loader, val_loader):
+def train(config, model: Model, train_loader, val_loader):
     train_losses, test_losses = [], []
     test_every = config['test_every']
     num_epochs = config['epochs']
@@ -83,10 +92,10 @@ def train(config, model, train_loader, val_loader):
             model.optim_zero_grad()
             loss.backward()
             model.optim_step()
-            
             epoch_loss += np.array(loss_l)
+
         train_losses.append((epoch, epoch_loss/len(train_loader)))
-        model.scheduler_step()
+        model.scheduler_step(epoch)
         # test loss
         if (epoch+1) % test_every == 0:            
             test_loss = test(model, val_loader)
@@ -105,7 +114,7 @@ def train(config, model, train_loader, val_loader):
             if early_stop.early_stop:
                 print("Early stopping")
                 break
-    
+    # utils.plot_curve(model, config, train_losses, test_losses)
     only_test_loss = [x[1][1] for x in test_losses]
     # if only_look_at_decoder:
     #     only_test_loss = [x[1][1] for x in test_losses]
@@ -117,7 +126,7 @@ def train(config, model, train_loader, val_loader):
     
     # compute median of test loss in a window of 15
     meds = []
-    window = 50
+    window = 5
     only_test_loss = [np.nan]*(window) + only_test_loss + [np.nan]*(window)
     for i in range(window, len(only_test_loss)-window):
         meds.append(np.nanmean(only_test_loss[i-window:i+window]))
@@ -126,7 +135,7 @@ def train(config, model, train_loader, val_loader):
 
 def one_train(config, device):        
     # create model and optimizer
-    model = Model(config, input_dim=emissions_dim)
+    model = Model(config, input_dim=emissions_dim).to(device)
     # create dataloaders
     batch_size = config['batch_size']
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -144,47 +153,42 @@ def one_train(config, device):
 
 # create optuna function
 def objective_(trial):
-    config = deepcopy(config_global)
+    config = deepcopy(config_global)    
     # config['rnn']['hidden_size'] = trial.suggest_categorical('hidden_size', [24, 32, 48])
     config['rnn']['hidden_size'] = trial.suggest_categorical('hidden_size', [24, 32, 48])
-    # config['rnn']['num_layers'] = trial.suggest_categorical('num_layers', [1, 2])        
-    config['rnn']['num_layers'] = 1       
-    # config['rnn']['dropout'] = trial.suggest_float('dropout', 0.1, 0.5)
-    config['rnn']['dropout'] = 0.15
-    config['batch_size'] = trial.suggest_categorical('batch_size', [32, 48, 64])    
+    config['rnn']['num_layers'] = trial.suggest_categorical('num_layers', [1, 2])        
+    # config['rnn']['num_layers'] = 1       
+    config['rnn']['dropout'] = trial.suggest_float('dropout', 0.1, 0.4)
+    # config['rnn']['dropout'] = 0.15
+    config['batch_size'] = trial.suggest_categorical('batch_size', [32, 48, 96])    
     # config['batch_size'] = 48
     # config['decoder']['cnn']['lr'] = trial.suggest_float('cnn_lr', 1e-5, 0.1, log=True)
-    config['decoder']['cnn']['lr'] = trial.suggest_float('cnn_lr', 1e-3, 1, log=True)
-    
-    config['decoder']['cnn']['kernel_size'] = trial.suggest_categorical('kernel_size', [5, 7, 9])        
+    config['decoder']['cnn']['lr'] = trial.suggest_float('cnn_lr', 1e-4, 0.1, log=True)
+    config['decoder']['cnn']['kernel_size'] = trial.suggest_categorical('kernel_size', [3, 5, 9])        
     config['decoder']['cnn']['dropout'] = trial.suggest_float('dropout_cnn', 0.1, 0.5)
     # config['decoder']['cnn']['dropout'] = 0.25
     # chans = trial.suggest_categorical('channels', [6, 12])
     chans = trial.suggest_categorical('channels', [4, 8, 16])
     # chans = 8
-    layers = trial.suggest_categorical('lay', [3, 5, 7])
-    config['decoder']['cnn']['channels'] = [chans]*layers
-    
-    if config['decoder']['scheduler']['which'] == 'cosine':
-        config['decoder']['scheduler']['cosine_restart_after'] = trial.suggest_categorical('restart_after', [40, 80, 120])    
+    layers = trial.suggest_categorical('lay', [2, 4, 6])
+    config['decoder']['cnn']['channels'] = [chans]*layers    
 
     res = []
-    for _ in range(5):
+    for _ in range(3):
         utils.set_seeds(np.random.randint(1000))
         res.append(one_train(config, device))
     return np.mean(res)    
 
 
 def exp():    
-    study_name = 'results/cosine'  # Unique identifier of the study    
-    config_global['dir']['results'] = 'results/cosine/'
+    study_name = 'results/stim'  # Unique identifier of the study    
+    config_global['dir']['results'] = 'results/stim/'
     if not os.path.exists(study_name + '.db'):
         study = optuna.create_study(study_name=study_name, storage='sqlite:///' + study_name + '.db', direction="minimize")
     else:
         study = optuna.load_study(study_name=study_name, storage='sqlite:///' + study_name + '.db')
-
-    # func = lambda trial: objective_rnn(trial, base_seed, study_name)
-    # study.optimize(objective_, n_trials=800)
+    
+    # study.optimize(objective_, n_trials=400)
     df = study.trials_dataframe()
     df.to_csv(open(study_name + ".csv", 'w'), index=False, header=True)
 

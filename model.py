@@ -4,7 +4,7 @@ from decoder import LinearAccDecoder, CNNDecoder, CNNDecoderIndivdual, RNNDecode
 from vae import VAE
 import os
 import utils
-from gp import gp_ll
+from priors import GaussianPrior
 
 class Model(nn.Module):
     def __init__(self, config, input_dim, neuron_bias=None):
@@ -15,8 +15,8 @@ class Model(nn.Module):
         # vae        
         self.vae = VAE(config, input_dim, xz_list, neuron_bias)        
         # print num train params in vae
-        print('Number of trainable parameters in VAE:', utils.count_parameters(self.vae))
-        
+        print('Number of trainable parameters in VAE:', utils.count_parameters(self.vae))            
+            
         # behavior decoder
         behavior_decoder = config['decoder']['which']        
         behavior_weight = config['decoder']['behavior_weight']
@@ -36,12 +36,29 @@ class Model(nn.Module):
         else:
             self.behavior_decoder = None
             self.behavior_weight = 0        
-            print("No behavior decoder")        
-        
+            print("No behavior decoder")
+            assert sum(xz_list[:2]) == 0, "Behavior decoder not present but z dimensions are not zero"
+
+        # prior over z
+        self.z_prior = config['z_prior']['include']
+        if self.z_prior:
+            # keep only non-zero values in xz_list
+            xz_list = [x for x in xz_list if x > 0]
+            self.z_prior_wts = config['z_prior']['weights']
+            assert len(self.z_prior_wts) == len(xz_list), "Number of priors should match number of z dimensions"
+            self.learn_prior = config['z_prior']['learn']
+            prior_on_mean = config['z_prior']['prior_on_mean']
+            self.prior_modules = []            
+            for m, s, w in zip(config['z_prior']['means'], config['z_prior']['stds'], self.z_prior_wts):
+                self.prior_modules.append(GaussianPrior(m, s, w, 0.1, self.learn_prior, prior_on_mean))
+            self.prior_modules = nn.ModuleList(self.prior_modules)
+
         # name model
         self.arch_name = self.vae.arch_name        
         if self.behavior_decoder:
-            self.arch_name += self.behavior_decoder.arch_name                
+            self.arch_name += self.behavior_decoder.arch_name
+        if self.z_prior:
+            self.arch_name += '_prior'
         self.final_path = utils.model_store_path(self.config, self.arch_name)
         if not os.path.exists(self.final_path):
             os.makedirs(self.final_path)
@@ -63,6 +80,11 @@ class Model(nn.Module):
             behave_loss = self.behavior_weight * self.behavior_decoder.loss(behavior_pred, behavior_truth, z)            
             loss += behave_loss
             loss_l.append(behave_loss.item())
+        if self.z_prior:
+            for i, z_prior in enumerate(self.prior_modules):
+                z_prior_loss = z_prior.loss(z[:, :, i], mu[:, :, i])
+                loss += z_prior_loss
+                loss_l.append(z_prior_loss.item())
         
         return loss, loss_l
         
@@ -79,16 +101,19 @@ class Model(nn.Module):
         else:
             return samples_vae, [None for _ in range(n_samples)]
     
-    def optim_step(self):
+    def optim_step(self, train_decoder):
         self.vae.optimizer.step()
-        if self.behavior_decoder:
+        if self.behavior_decoder and train_decoder:            
             self.behavior_decoder.optimizer.step()
+        if self.z_prior and self.learn_prior:
+            for prior in self.prior_modules:
+                prior.optimizer.step()
 
-    def scheduler_step(self, epoch):
+    def scheduler_step(self, step_decoder):
         if self.vae.scheduler:
             self.vae.scheduler.step()
-        if epoch > 100 and self.behavior_decoder and self.behavior_decoder.scheduler:
-            self.behavior_decoder.scheduler.step()            
+        if self.behavior_decoder and self.behavior_decoder.scheduler and step_decoder:
+            self.behavior_decoder.scheduler.step()
             # print("LR: ", self.behavior_decoder.scheduler.get_lr())
 
     def optim_zero_grad(self):

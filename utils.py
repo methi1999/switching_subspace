@@ -23,9 +23,11 @@ def plot_curve(model, config, train_losses, test_losses):
     fig, ax1 = plt.subplots()
     ax2 = ax1.twinx()
     ax1.plot(train_epochs, train_losses_only[:, 0], label='Train Reconstruction', color='blue', linestyle='--')
-    ax2.plot(train_epochs, train_losses_only[:, 1]/behave_weight, label='Train Decoding', color='red', linestyle='--')
+    if train_losses_only.shape[1] > 1:
+        ax2.plot(train_epochs, train_losses_only[:, 1]/behave_weight, label='Train Decoding', color='red', linestyle='--')
     ax1.plot(test_epochs, test_losses_only[:, 0], label='Test Reconstruction', color='blue')
-    ax2.plot(test_epochs, test_losses_only[:, 1]/behave_weight, label='Test Decoding', color='red')
+    if train_losses_only.shape[1] > 1:
+        ax2.plot(test_epochs, test_losses_only[:, 1]/behave_weight, label='Test Decoding', color='red')
     ax1.set_xlabel('Epochs')
     ax1.set_ylabel('Reconstruction Loss', color='blue')
     ax2.set_ylabel('Decoding Loss', color='red')
