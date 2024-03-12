@@ -63,14 +63,14 @@ class Model(nn.Module):
         if not os.path.exists(self.final_path):
             os.makedirs(self.final_path)
     
-    def forward(self, spikes):
-        y_recon, (mu, A), (z, x) = self.vae(spikes)
+    def forward(self, spikes, n_samples):
+        y_recon, mu, A, z, x = self.vae(spikes, n_samples)
         if self.behavior_decoder:
             behavior = self.behavior_decoder(x, z)
             # behavior = self.behavior_decoder(mu[:, :, self.vae.z_dim:], mu[:, :, :self.vae.z_dim])
         else:
             behavior = None
-        return y_recon, (mu, A), (z, x), behavior
+        return y_recon, mu, A, z, x, behavior
 
     def loss(self, epoch, y, y_recon, mu, A, z, x, behavior_pred, behavior_truth):       
         # loss = torch.tensor(0.0)
@@ -89,17 +89,18 @@ class Model(nn.Module):
         return loss, loss_l
         
     def sample(self, y, n_samples):
-        samples_vae = self.vae.sample(y, n_samples)
-        # if behavior decoder is present, sample behavior as well
-        if self.behavior_decoder:
-            samples_behavior = []
-            for i in range(n_samples):
-                _, _, (z, x) = samples_vae[i]
-                behavior = self.behavior_decoder(x, z)
-                samples_behavior.append(behavior)
-            return samples_vae, samples_behavior
-        else:
-            return samples_vae, [None for _ in range(n_samples)]
+        self.forward(y, n_samples)
+        # samples_vae = self.vae.sample(y, n_samples)
+        # # if behavior decoder is present, sample behavior as well
+        # if self.behavior_decoder:
+        #     samples_behavior = []
+        #     for i in range(n_samples):
+        #         _, _, (z, x) = samples_vae[i]
+        #         behavior = self.behavior_decoder(x, z)
+        #         samples_behavior.append(behavior)
+        #     return samples_vae, samples_behavior
+        # else:
+        #     return samples_vae, [None for _ in range(n_samples)]
     
     def optim_step(self, train_decoder):
         self.vae.optimizer.step()

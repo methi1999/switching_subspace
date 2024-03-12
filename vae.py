@@ -6,6 +6,7 @@ import math
 import os
 
 eps = 1e-6
+# TODO: Make cholesky decomposition work
 
 class VAE(nn.Module):
     def __init__(self, config, input_dim, xz_list, neuron_bias=None, init='vae_2_32_1_bi_standard'):
@@ -21,9 +22,11 @@ class VAE(nn.Module):
         self.x_dim = sum(xz_list)
         self.z_dim = len(xz_list)
         output_dim = (self.z_dim + self.x_dim)*(self.z_dim + self.x_dim + 1)
-        self.cholesky_mask = torch.tril(torch.ones(self.z_dim+self.x_dim, self.z_dim+self.x_dim))
-        # set diagonal to 0
-        self.cholesky_mask = self.cholesky_mask - torch.diag_embed(torch.diagonal(self.cholesky_mask))
+        # cholesky mask
+        # self.cholesky_mask = torch.tril(torch.ones(self.z_dim+self.x_dim, self.z_dim+self.x_dim))
+        # # set diagonal to 0
+        # self.cholesky_mask = self.cholesky_mask - torch.diag_embed(torch.diagonal(self.cholesky_mask))
+        # self.cholesky_mask = self.cholesky_mask.unsqueeze(0)
 
         hidden_dim, num_layers = config['rnn']['hidden_size'], config['rnn']['num_layers']
         bidirectional = config['rnn']['bidirectional']
@@ -83,6 +86,16 @@ class VAE(nn.Module):
             print('Using moving average of', self.moving_average)
         else:
             print('Not using moving average')
+
+        # # smoothing
+        # self.smoothing = config['rnn']['smoothing']
+        # if self.smoothing:            
+        #     time_points = int(2.5/config['shape_dataset']['win_len'])
+        #     x = torch.linspace(-2, 0.5, time_points)
+        #     # construct x - x' for all pairs of x and x'
+        #     y = x.view(-1, 1) - x.view(1, -1)
+        #     # construct the kernel
+        #     self.smoothing_kernel = torch.exp(-y.pow(2)/2*self.smoothing**2)
         
         # optmizer
         self.optimizer = torch.optim.Adam(self.parameters(), lr=config['rnn']['lr'], weight_decay=config['rnn']['weight_decay'])        
@@ -119,27 +132,31 @@ class VAE(nn.Module):
         A = encoded[:, :, self.z_dim+self.x_dim:].reshape(batch, seq, self.z_dim+self.x_dim, self.z_dim+self.x_dim)
         return mu, A
     
-    # def reparameterize_original(self, mu, A):
-    #     # mu is of shape (batch, seq, z+x)
-    #     batch, seq, mu_dim = mu.shape
-    #     A_flat = A.view(batch*seq, mu_dim, mu_dim)
-    #     mu_flat = mu.reshape(batch*seq, mu_dim).unsqueeze(-1)
-    #     eps = torch.randn_like(mu_flat)
-    #     # print(mu.shape, A.shape, eps.shape)
-    #     sample = (mu_flat + torch.bmm(A_flat, eps)).squeeze(-1)        
-    #     return sample.view(batch, seq, mu_dim)
-    
     def reparameterize(self, mu, A):
         # mu is of shape (batch, seq, z+x)
         batch, seq, mu_dim = mu.shape
         A_flat = A.view(batch*seq, mu_dim, mu_dim)
-        mu_flat = mu.reshape(batch*seq, mu_dim)
-        m = torch.distributions.MultivariateNormal(mu_flat, scale_tril=A_flat)     
-        return m.sample().view(batch, seq, mu_dim)
+        mu_flat = mu.reshape(batch*seq, mu_dim).unsqueeze(-1)
+        eps = torch.randn_like(mu_flat)
+        # print(mu.shape, A.shape, eps.shape)
+        sample = (mu_flat + torch.bmm(A_flat, eps)).squeeze(-1)        
+        return sample.view(batch, seq, mu_dim)
+    
+    # def reparameterize(self, mu, A):
+    #     # mu is of shape (batch, seq, z+x)
+    #     batch, seq, mu_dim = mu.shape
+    #     mu_flat = mu.reshape(batch*seq, mu_dim)
+    #     A_flat = A.reshape(batch*seq, mu_dim, mu_dim)
 
-    def forward(self, y):
+    #     dist = torch.distributions.MultivariateNormal(mu_flat, scale_tril=A_flat)     
+    #     # A_flat = torch.bmm(A_flat, A_flat.transpose(1, 2))        
+    #     # dist = torch.distributions.MultivariateNormal(mu_flat, covariance_matrix=A_flat)     
+
+    #     return dist.sample().reshape(batch, seq, mu_dim)
+
+    def forward(self, y, n_samples):
         # y is of shape (batch_size, seq_len, input_dim)
-        # batch, seq, input_dim = y.shape
+        batch, seq, input_dim = y.shape
         encoded, _ = self.encoder(y)
         # encoded = self.encoder(y)
         # if isinstance(encoded, tuple):
@@ -147,16 +164,17 @@ class VAE(nn.Module):
 
         encoded = self.posterior(encoded)
         mu, A = self.split(encoded)
-
-        # make positive
-        # A = nn.Softplus()(A)
-        # make only diagonal positive
-        diag = torch.diagonal(A, dim1=-2, dim2=-1)
-        diag = nn.Softplus()(diag)                
-        A = A * self.cholesky_mask + torch.diag_embed(diag)
-        # apply cholesky mask
-        # A = A * self.cholesky_mask        
         
+
+        # # cholesky: make only diagonal positive
+        # # first reshape A to (batch*seq, z+x, z+x)
+        # A = A.reshape(batch*seq, self.z_dim+self.x_dim, self.z_dim+self.x_dim)        
+        # diag = torch.diagonal(A, dim1=-2, dim2=-1)
+        # diag = nn.Softplus()(diag)        
+        # A = A * self.cholesky_mask + torch.diag_embed(diag)        
+        # # reshape it back
+        # A = A.reshape(batch, seq, self.z_dim+self.x_dim, self.z_dim+self.x_dim)
+                
         # # smooth means        
         # if self.moving_average is not None:
         #     # both
@@ -171,9 +189,9 @@ class VAE(nn.Module):
         # mu = torch.cumsum(mu, dim=1)
         
         # sample z and x
-        sample_zx = self.reparameterize(mu, A)
+        # sample_zx = self.reparameterize(mu, A)
         # sample z and x 10 times and concatenate along batch
-        # sample_zx = torch.cat([self.reparameterize(mu, A) for _ in range(10)], dim=0)
+        sample_zx = torch.cat([self.reparameterize(mu, A) for _ in range(n_samples)], dim=0)
         
         # extract x and z
         z, x = sample_zx[:, :, :self.z_dim], sample_zx[:, :, self.z_dim:]
@@ -194,43 +212,44 @@ class VAE(nn.Module):
         # if self.neuron_bias is not None:
         #     y_recon = y_recon + self.neuron_bias
         y_recon = nn.Softplus()(y_recon)
-        return y_recon, (mu, A), (z, x)
-
-    # def sample(self, num_samples):
-    #     z = torch.randn(num_samples, latent_dim)
-    #     x_recon = self.decoder(z)
-    #     return x_recon
+        return y_recon, mu, A, z, x
 
     def loss(self, y, y_recon, mu, A):
-        batch, seq, num_n = y.shape       
+        """
+        y and y_recon are of shape [batch * n_samples, time, dim]
+        mu and A are of shape [batch, time, z+x] and [batch, time, z+x, z+x]
+        """
+        batch, seq, _ = mu.shape
+        num_samples = y_recon.shape[0] // batch
         # compute AAt
-        flattened_A = A.view(batch*seq, self.z_dim+self.x_dim, self.z_dim+self.x_dim)        
+        flattened_A = A.reshape(batch*seq, self.z_dim+self.x_dim, self.z_dim+self.x_dim)        
+        # flattened_A = torch.bmm(flattened_A, torch.transpose(flattened_A, 1, 2))        
         mu = mu.reshape(batch*seq, self.z_dim+self.x_dim)
         # print(cov.shape)
         # poisson loss
         # print(y.shape, y_recon.shape)
+        # repeat ground truth        
+        y = torch.cat([y]*num_samples, dim=0)
         recon_loss = torch.sum(y_recon - y * torch.log(y_recon))
         # print((torch.sum(mu.pow(2), dim=1) + torch.einsum("...ii", cov) - mu.shape[1] - torch.log(det+eps)).shape)
         
-        # # original KL loss
-        # cov = torch.bmm(flattened_A, torch.transpose(flattened_A, 1, 2))
-        # det = torch.det(cov)
-        # kl_loss = 0.5 * torch.sum(torch.sum(mu.pow(2), dim=1) + torch.einsum("...ii", cov) - mu.shape[1] - torch.log(det+eps))
+        # original KL loss
+        cov = torch.bmm(flattened_A, torch.transpose(flattened_A, 1, 2))
+        det = torch.det(cov)
+        kl_loss = 0.5 * torch.sum(torch.sum(mu.pow(2), dim=1) + torch.einsum("...ii", cov) - mu.shape[1] - torch.log(det+eps))
 
-        # new KL loss
-        l, d = mu.shape[0], mu.shape[1]
-        mu1 = torch.zeros(l, d)
-        sigma1 = torch.eye(d, d).repeat(l, 1, 1)
-        p = torch.distributions.MultivariateNormal(mu1, scale_tril=sigma1)
-        q = torch.distributions.MultivariateNormal(mu, scale_tril=flattened_A)
-        # q = torch.distributions.MultivariateNormal(mu, scale_tril=flattened_A)
-        # compute the kl divergence
-        kl_loss = torch.distributions.kl_divergence(p, q).sum()
+        # # new KL loss
+        # l, d = mu.shape[0], mu.shape[1]
+        # mu1 = torch.zeros(l, d)
+        # sigma1 = torch.eye(d, d).repeat(l, 1, 1)
+        # p = torch.distributions.MultivariateNormal(mu1, scale_tril=sigma1)
+        # q = torch.distributions.MultivariateNormal(mu, scale_tril=flattened_A)        
+        # # compute the kl divergence
+        # kl_loss = torch.distributions.kl_divergence(p, q).sum()
+        # kl_loss = 0        
         
-        return (recon_loss + kl_loss)/batch
-
-    def sample(self, y, n):
-        return [self.forward(y) for _ in range(n)]
+        # print(flattened_A[0])
+        return (recon_loss + kl_loss)/(batch*num_samples)
     
 
 class PositionalEncoding(nn.Module):

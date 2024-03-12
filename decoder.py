@@ -135,7 +135,7 @@ class CNNDecoderIndivdual(nn.Module):
             self.scheduler = None
 
     def forward(self, x, z):
-        # x is of shape (batch_size, seq_len, input_dim)        
+        # x is of shape (batch_size*num_samples, seq_len, input_dim)        
         # x = x * z
         x = x.permute(0, 2, 1)
         z = z.permute(0, 2, 1)
@@ -161,7 +161,15 @@ class CNNDecoderIndivdual(nn.Module):
         return torch.cat([x_stim, x_choice], dim=1)        
 
     def loss(self, predicted, ground_truth, z, reduction='mean'):
-        # bce loss
+        """
+        Binary cross entropy loss
+        predicted: (batch_size*num_samples, 4)
+        ground_truth: (batch_size, 2)
+        """
+        batch_size = ground_truth.size(0)
+        num_samples = predicted.size(0)//batch_size
+        # repeat ground truth        
+        ground_truth = torch.cat([ground_truth]*num_samples, dim=0)
         # loss_fn = nn.BCEWithLogitsLoss(reduction=reduction)
         loss_fn = nn.CrossEntropyLoss(reduction=reduction)
         loss = 0        
