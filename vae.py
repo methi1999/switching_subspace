@@ -9,7 +9,7 @@ eps = 1e-6
 # TODO: Make cholesky decomposition work
 
 class VAE(nn.Module):
-    def __init__(self, config, input_dim, xz_list, neuron_bias=None, init='vae_2_32_1_bi_standard'):
+    def __init__(self, config, input_dim, xz_list, neuron_bias=None, init='vae_[1, 1, 1]_8_2_bi_standard'):
         super().__init__()               
         # keep only non-zero values in xz_list
         xz_list = [x for x in xz_list if x > 0]
@@ -100,18 +100,18 @@ class VAE(nn.Module):
         # optmizer
         self.optimizer = torch.optim.Adam(self.parameters(), lr=config['rnn']['lr'], weight_decay=config['rnn']['weight_decay'])        
 
-        # # init model        
-        # if init is not None:
-        #     try:
-        #         data_des = 'dandi_{}/{}_ms'.format(config['shape_dataset']['id'], int(config['shape_dataset']['win_len']*1000))
-        #         pth = os.path.join(config['dir']['results'], data_des, init, 'best')
-        #         checkpoint = torch.load(pth, map_location=lambda storage, loc: storage)
-        #         # replace encoder in keys with nothing
-        #         checkpoint['model_state_dict'] = {k.replace('vae.', ''): v for k, v in checkpoint['model_state_dict'].items()}
-        #         self.load_state_dict(checkpoint['model_state_dict'])
-        #         print("Loading from pre-trained")
-        #     except:
-        #         print("Failed to load pre-trained")
+        # init model        
+        if init is not None:
+            try:
+                data_des = 'dandi_{}/{}_ms'.format(config['shape_dataset']['id'], int(config['shape_dataset']['win_len']*1000))
+                pth = os.path.join(config['dir']['results'], data_des, init, 'best')
+                checkpoint = torch.load(pth, map_location=lambda storage, loc: storage)
+                # replace encoder in keys with nothing
+                checkpoint['model_state_dict'] = {k.replace('vae.', ''): v for k, v in checkpoint['model_state_dict'].items()}
+                self.load_state_dict(checkpoint['model_state_dict'])
+                print("Loading from pre-trained")
+            except:
+                print("Failed to load pre-trained")
 
         assert self.neuron_bias is None and self.moving_average is None, "Not implemented"
 
@@ -214,7 +214,7 @@ class VAE(nn.Module):
         y_recon = nn.Softplus()(y_recon)
         return y_recon, mu, A, z, x
 
-    def loss(self, y, y_recon, mu, A):
+    def loss(self, y, y_recon, mu, A, z):
         """
         y and y_recon are of shape [batch * n_samples, time, dim]
         mu and A are of shape [batch, time, z+x] and [batch, time, z+x, z+x]

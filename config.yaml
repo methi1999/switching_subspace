@@ -15,8 +15,8 @@ shape_dataset:
   win_len: 0.1
 
 # mention x for stimulus, choice and rest
-dim_x_z: [0, 0, 1, 1]
-# dim_x_z: [0, 0, 1, 1]
+dim_x_z: [0, 0, 1, 1, 1]
+# dim_x_z: [0, 1, 1, 1]
 
 z_prior:
   include: False
@@ -29,15 +29,15 @@ z_prior:
 
 
 rnn:  
-  # rnn_type: 'GRU'
   bidirectional: True
-  hidden_size: 16
-  num_layers: 1
+  hidden_size: 8
+  num_layers: 2
   dropout: 0.1
   softmax_temp: 1
   lr: 0.01
-  weight_decay: 0
+  weight_decay: 0.01
   smoothing: 0.1
+  z_var_entropy: True
 
   scheduler:
     which: ''
@@ -45,9 +45,9 @@ rnn:
     const_factor: 0.97
 
 decoder:
-  behavior_weight: 10
+  behavior_weight: 5
 
-  stimulus_weight: 1
+  stimulus_weight: 2
   choice_weight: 1
   
   # which: 'cnn_indi'
@@ -57,10 +57,10 @@ decoder:
   cnn:
     # channels: [4, 4, 4, 4, 4, 4]
     channels: [4, 4]
-    kernel_size: 7
-    dropout: 0.2
-    lr: 0.003
-    weight_decay: 0.01
+    kernel_size: 5
+    dropout: 0.1
+    lr: 0.01
+    weight_decay: 0.1
 
   rnn:
     layers: 1
@@ -88,5 +88,6 @@ early_stop:
 epochs: 2000
 test_every: 20
 plot_every: 5
-batch_size: 48
-num_samples_train: 50
+batch_size: 192
+num_samples_train: 20
+num_samples_test: 20

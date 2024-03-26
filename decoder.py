@@ -93,17 +93,19 @@ class CNNDecoderIndivdual(nn.Module):
 
         def make_1d_conv(inp_dim):
             # 1d conv        
+            use_group = 2
             layers = []
             for i in range(len(channels)):
                 if i == 0:
                     layers.append(nn.Conv1d(in_channels=inp_dim, out_channels=channels[i], kernel_size=kernel_size, padding=pad))
                 else:
-                    layers.append(nn.Conv1d(in_channels=channels[i-1], out_channels=channels[i], kernel_size=kernel_size, padding=pad))
+                    layers.append(nn.Conv1d(in_channels=channels[i-1], out_channels=channels[i], kernel_size=kernel_size, padding=pad, groups=use_group))
                 layers.append(nn.BatchNorm1d(channels[i]))
                 layers.append(nn.LeakyReLU())
-                layers.append(nn.Dropout(dropout))            
+                if dropout > 0:
+                    layers.append(nn.Dropout(dropout))            
             # linear layer
-            layers.append(nn.Conv1d(in_channels=channels[-1], out_channels=2, kernel_size=1))
+            layers.append(nn.Conv1d(in_channels=channels[-1], out_channels=2, kernel_size=1, groups=use_group))
             return layers
         
         if self.stim_dim > 0:
@@ -143,17 +145,17 @@ class CNNDecoderIndivdual(nn.Module):
             x_stim = x[:, :self.stim_dim, :]
             x_stim = self.conv_stim(x_stim)
             x_stim = x_stim * z[:, 0:1, :]
-            x_stim = torch.max(x_stim, dim=2).values            
-            # x_stim = torch.mean(x_stim, dim=2)
+            # x_stim = torch.max(x_stim, dim=2).values            
+            x_stim = torch.mean(x_stim, dim=2)
         else:
             # x_stim = torch.zeros(x.size(0), 1, device=x.device)        
             x_stim = torch.zeros(x.size(0), 2, device=x.device)        
         if self.conv_choice:
-            x_choice = x[:, self.stim_dim:self.stim_dim+self.choice_dim, :]            
+            x_choice = x[:, self.stim_dim:self.stim_dim+self.choice_dim, :]
             x_choice = self.conv_choice(x_choice)            
             x_choice = x_choice * z[:, self.choice_idx:self.choice_idx+1, :]
-            x_choice = torch.max(x_choice, dim=2).values            
-            # x_choice = torch.mean(x_choice, dim=2)
+            # x_choice = torch.max(x_choice, dim=2).values            
+            x_choice = torch.mean(x_choice, dim=2)
         else:
             # x_choice = torch.zeros(x.size(0), 1, device=x.device)
             x_choice = torch.zeros(x.size(0), 2, device=x.device)
