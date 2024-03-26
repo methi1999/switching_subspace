@@ -35,9 +35,9 @@ rnn:
   dropout: 0.1
   softmax_temp: 1
   lr: 0.01
-  weight_decay: 0.01
+  weight_decay: 0.0001
   smoothing: 0.1
-  z_var_entropy: True
+  # z_var_entropy: False
 
   scheduler:
     which: ''

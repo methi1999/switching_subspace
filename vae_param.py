@@ -39,14 +39,15 @@ class VAEParameterised(nn.Module):
         self.posterior = nn.Linear(hidden_dim*2 if bidirectional else hidden_dim, output_dim)
         
         bidirectional = True
-        self.z_encoder = nn.GRU(input_dim, hidden_dim, num_layers=2, batch_first=True,
+        hid_dim = hidden_dim
+        self.z_encoder = nn.GRU(input_dim, hid_dim, num_layers=2, batch_first=True,
                               bidirectional=bidirectional, dropout=dropout if num_layers > 1 else 0)        
-        self.z_var_entropy = config['rnn']['z_var_entropy']
-        if self.z_var_entropy:
-            self.z_mean_var = nn.Linear(hidden_dim*2 if bidirectional else hidden_dim, self.z_dim)
-        else:
-            self.z_mean_var = nn.Linear(hidden_dim*2 if bidirectional else hidden_dim, 3*self.z_dim)
-            self.log_num_time_bins = math.log(int(2.5/config['shape_dataset']['win_len']))
+        # self.z_var_entropy = config['rnn']['z_var_entropy']
+        # if self.z_var_entropy:
+        #     self.z_mean_var = nn.Linear(hidden_dim*2 if bidirectional else hidden_dim, self.z_dim)
+        # else:
+        self.z_mean_var = nn.Linear(hid_dim*2 if bidirectional else hid_dim, 3*self.z_dim)
+        self.log_num_time_bins = math.log(int(2.5/config['shape_dataset']['win_len']))
         
         # reconstruction
         self.linear_maps = nn.ModuleList([nn.Linear(i, input_dim) for i in xz_list])        

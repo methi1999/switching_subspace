@@ -100,18 +100,18 @@ class VAE(nn.Module):
         # optmizer
         self.optimizer = torch.optim.Adam(self.parameters(), lr=config['rnn']['lr'], weight_decay=config['rnn']['weight_decay'])        
 
-        # init model        
-        if init is not None:
-            try:
-                data_des = 'dandi_{}/{}_ms'.format(config['shape_dataset']['id'], int(config['shape_dataset']['win_len']*1000))
-                pth = os.path.join(config['dir']['results'], data_des, init, 'best')
-                checkpoint = torch.load(pth, map_location=lambda storage, loc: storage)
-                # replace encoder in keys with nothing
-                checkpoint['model_state_dict'] = {k.replace('vae.', ''): v for k, v in checkpoint['model_state_dict'].items()}
-                self.load_state_dict(checkpoint['model_state_dict'])
-                print("Loading from pre-trained")
-            except:
-                print("Failed to load pre-trained")
+        # # init model        
+        # if init is not None:
+        #     try:
+        #         data_des = 'dandi_{}/{}_ms'.format(config['shape_dataset']['id'], int(config['shape_dataset']['win_len']*1000))
+        #         pth = os.path.join(config['dir']['results'], data_des, init, 'best')
+        #         checkpoint = torch.load(pth, map_location=lambda storage, loc: storage)
+        #         # replace encoder in keys with nothing
+        #         checkpoint['model_state_dict'] = {k.replace('vae.', ''): v for k, v in checkpoint['model_state_dict'].items()}
+        #         self.load_state_dict(checkpoint['model_state_dict'])
+        #         print("Loading from pre-trained")
+        #     except:
+        #         print("Failed to load pre-trained")
 
         assert self.neuron_bias is None and self.moving_average is None, "Not implemented"
 
