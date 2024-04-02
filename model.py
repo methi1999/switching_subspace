@@ -3,7 +3,7 @@ import torch.nn as nn
 from decoder import LinearAccDecoder, CNNDecoder, CNNDecoderIndivdual, RNNDecoderIndivdual
 from vae import VAE
 from vae_family import VAEParameterised
-from vae_unimodal import VAEUnimodal
+from vae_gp import VAEGP
 import os
 import utils
 from priors import GaussianPrior
@@ -14,10 +14,16 @@ class Model(nn.Module):
         self.config = config
         # dimensions
         xz_list = config['dim_x_z']
-        # vae        
-        # self.vae = VAE(config, input_dim, xz_list, neuron_bias)        
-        # self.vae = VAEParameterised(config, input_dim, xz_list, neuron_bias)        
-        self.vae = VAEUnimodal(config, input_dim, xz_list, neuron_bias)
+        # vae
+        which_vae = config['which_vae']
+        if which_vae == 'baseline':        
+            self.vae = VAE(config, input_dim, xz_list, neuron_bias)        
+        elif which_vae == 'parameterised':
+            self.vae = VAEParameterised(config, input_dim, xz_list, neuron_bias)        
+        elif which_vae == 'vae_gp':
+            self.vae = VAEGP(config, input_dim, xz_list, neuron_bias)
+        else:
+            raise ValueError("Unknown VAE type")
         # print num train params in vae
         print('Number of trainable parameters in VAE:', utils.count_parameters(self.vae))            
             

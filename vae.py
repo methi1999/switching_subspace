@@ -27,9 +27,9 @@ class VAE(nn.Module):
         # self.cholesky_mask = self.cholesky_mask - torch.diag_embed(torch.diagonal(self.cholesky_mask))
         # self.cholesky_mask = self.cholesky_mask.unsqueeze(0)
 
-        hidden_dim, num_layers = config['rnn']['hidden_size'], config['rnn']['num_layers']
-        bidirectional = config['rnn']['bidirectional']
-        dropout = config['rnn']['dropout']
+        hidden_dim, num_layers = config['vae_baseline']['rnn']['hidden_size'], config['vae_baseline']['rnn']['num_layers']
+        bidirectional = config['vae_baseline']['rnn']['bidirectional']
+        dropout = config['vae_baseline']['rnn']['dropout']
 
         # self.encoder = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.LeakyReLU(), nn.Linear(hidden_dim, hidden_dim))
         # self.posterior = nn.Linear(hidden_dim, output_dim)
@@ -69,7 +69,7 @@ class VAE(nn.Module):
         # self.sigmoid_scaling_factor = nn.Parameter(torch.tensor(2.0), requires_grad=True)
 
         # softmax temperature
-        self.softmax_temp = config['rnn']['softmax_temp']
+        self.softmax_temp = config['vae_baseline']['rnn']['softmax_temp']
 
         # name model
         self.arch_name = 'vae_{}_{}_{}'.format(xz_list, hidden_dim, num_layers)
@@ -97,7 +97,7 @@ class VAE(nn.Module):
         #     self.smoothing_kernel = torch.exp(-y.pow(2)/2*self.smoothing**2)
         
         # optmizer
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=config['rnn']['lr'], weight_decay=config['rnn']['weight_decay'])        
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=config['vae_baseline']['lr'], weight_decay=config['vae_baseline']['weight_decay'])        
 
         # # init model        
         # if init is not None:
@@ -114,12 +114,12 @@ class VAE(nn.Module):
 
         assert self.neuron_bias is None and self.moving_average is None, "Not implemented"
 
-        if config['rnn']['scheduler']['which'] == 'cosine':
-            restart = config['rnn']['scheduler']['cosine_restart_after']
+        if config['vae_baseline']['scheduler']['which'] == 'cosine':
+            restart = config['vae_baseline']['scheduler']['cosine_restart_after']
             scheduler1 = torch.optim.lr_scheduler.ConstantLR(self.optimizer, factor=1, total_iters=restart+restart//2)
             scheduler2 = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optimizer, T_0=restart)
             self.scheduler = torch.optim.lr_scheduler.SequentialLR(self.optimizer, schedulers=[scheduler1, scheduler2], milestones=[restart//2])
-        elif config['rnn']['scheduler']['which'] == 'decay':
+        elif config['vae_baseline']['scheduler']['which'] == 'decay':
             self.scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=0.97)
         else:
             print('Scheduler not implemented for GRU')

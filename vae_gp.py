@@ -5,7 +5,7 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 
-eps = 1e-5
+eps = 1e-6
 
 def derivative_time_series(x):
     # x is of shape (batch, dim, time)
@@ -26,31 +26,58 @@ def rbf_kernel(time, sigma):
     time_diff = time_range - time_range.t()
     return torch.exp(-time_diff**2 / (2 * sigma**2))
 
-def normal_likelihood(x, mu, cov_det, inv):
-    # x, mu are of shape (batch, dim)
-    # cov is of shape (batch, dim, dim)
-    # return likelihood of shape (batch)
-    dim = x.shape[-1]    
-    # calculate exponent
-    exponent = -0.5 * torch.sum((x - mu).unsqueeze(-1) * torch.bmm(inv, (x - mu).unsqueeze(-1)), dim=(1, 2))
-    # calculate constant
-    constant = 1 / ((2 * math.pi)**(dim/2) * torch.sqrt(cov_det))
-    return constant * torch.exp(exponent)    
+# def normal_likelihood(x, mu, cov_det, inv):
+#     # x, mu are of shape (batch, dim)
+#     # cov is of shape (batch, dim, dim)
+#     # return likelihood of shape (batch)
+#     dim = x.shape[-1]    
+#     # calculate exponent
+#     exponent = -0.5 * torch.sum((x - mu).unsqueeze(-1) * torch.bmm(inv, (x - mu).unsqueeze(-1)), dim=(1, 2))
+#     # calculate constant
+#     constant = 1 / ((2 * math.pi)**(dim/2) * torch.sqrt(cov_det))
+#     return constant * torch.exp(exponent)    
 
     
 
 class TimeSeries(nn.Module):
     
-    def __init__(self, input_dim, hidden_dim, latent_dim, time_bins, smoothing, num_layers, bidir, dropout):
+    def __init__(self, config, input_dim, latent_dim, time_bins):
         super().__init__()
+        model_config = config['vae_gp']
+        # rnn
+        hidden_dim = model_config['rnn_encoder']['hidden_size']
+        num_layers = model_config['rnn_encoder']['num_layers']
+        bidirectional = model_config['rnn_encoder']['bidirectional']
+        dropout = model_config['rnn_encoder']['dropout']
         self.rnn = nn.RNN(input_dim, hidden_dim, num_layers=num_layers, batch_first=True,
-                          bidirectional=bidir, dropout=dropout if num_layers > 1 else 0)
-        # self.rnn = nn.Linear(input_dim, hidden_dim*2 if bidir else hidden_dim)
-        self.posterior_mean = nn.Linear(hidden_dim*2 if bidir else hidden_dim, latent_dim)
-        self.block_diagonal = nn.Linear(hidden_dim*2 if bidir else hidden_dim, 2*latent_dim)
-        self.smoothing = smoothing
-        if smoothing:
-            cov_prior = rbf_kernel(time_bins, 2)
+                          bidirectional=bidirectional, dropout=dropout if num_layers > 1 else 0)
+        
+        # posterior mean and block diagonal
+        hidden_layers = model_config['post_rnn_linear']['hidden_dims']
+        dropout = model_config['post_rnn_linear']['dropout']
+        def get_linear(inp, out, hidden, dropout):
+            layers = []
+            for i in range(len(hidden)):
+                if i == 0:
+                    layers.append(nn.Linear(inp, hidden[i]))
+                else:
+                    layers.append(nn.Linear(hidden[i-1], hidden[i]))
+                layers.append(nn.ReLU())
+                layers.append(nn.Dropout(dropout))
+            layers.append(nn.Linear(hidden[-1], out))            
+            return layers
+
+        inp_dim = hidden_dim*2 if bidirectional else hidden_dim
+        self.posterior_mean = nn.Sequential(*get_linear(inp_dim, latent_dim, hidden_layers, dropout))
+        # self.full_cov = model_config['full_cov']
+        # if self.full_cov:
+        #     self.block_diagonal = nn.Sequential(*get_linear(inp_dim, 2*latent_dim, hidden_layers, dropout))
+        # else:
+        self.block_diagonal = nn.Sequential(*get_linear(inp_dim, 2*latent_dim, hidden_layers, dropout))
+        
+        self.smoothing_sigma = model_config['smoothing_sigma']
+        if self.smoothing_sigma:
+            cov_prior = rbf_kernel(time_bins, self.smoothing_sigma)
         else:
             cov_prior = torch.eye(time_bins)
         self.prior_cholesky = torch.linalg.cholesky(cov_prior)     
@@ -101,7 +128,7 @@ class TimeSeries(nn.Module):
         return kl
 
 
-class VAEUnimodal(nn.Module):
+class VAEGP(nn.Module):
     def __init__(self, config, input_dim, xz_list, neuron_bias=None, init=''):
         super().__init__()
         # keep only non-zero values in xz_list
@@ -116,42 +143,29 @@ class VAEUnimodal(nn.Module):
         self.z_dim = len(xz_list)
         time_bins = int(2.5/config['shape_dataset']['win_len'])     
 
-        hidden_dim, num_layers = config['rnn']['hidden_size'], config['rnn']['num_layers']
-        bidirectional = config['rnn']['bidirectional']
-        dropout = config['rnn']['dropout']
+        model_config = config['vae_gp']        
 
-        self.x_encoder = TimeSeries(input_dim, hidden_dim, self.x_dim, time_bins, False, num_layers, bidirectional, dropout)
-        
-        bidirectional = True
-        hid_dim = hidden_dim
-        self.z_encoder = TimeSeries(input_dim, hid_dim, self.z_dim, time_bins, False, num_layers, bidirectional, dropout)
+        self.x_encoder = TimeSeries(config, input_dim, self.x_dim, time_bins)        
+        self.z_encoder = TimeSeries(config, input_dim, self.z_dim, time_bins)
         
         # reconstruction
-        self.linear_maps = nn.ModuleList([nn.Linear(i, input_dim) for i in xz_list])        
-        
-        # softmax temperature
-        self.softmax_temp = config['rnn']['softmax_temp']
+        self.linear_maps = nn.ModuleList([nn.Linear(i, input_dim) for i in xz_list])                
+
+        # beta for kl loss
+        self.beta = model_config['kl_beta']
 
         # name model
-        self.arch_name = 'vae_unimodal_{}_{}_{}'.format(xz_list, hidden_dim, num_layers)
-        if bidirectional:
-            self.arch_name += '_bi'
+        hidden_dim = model_config['rnn_encoder']['hidden_size']
+        num_layers = model_config['rnn_encoder']['num_layers']
+        self.arch_name = 'vae_unimodal_{}_{}_{}'.format(xz_list, hidden_dim, num_layers)        
         if neuron_bias is not None:
             self.arch_name += '_bias'
-                
-        # optmizer
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=config['rnn']['lr'], weight_decay=config['rnn']['weight_decay'])        
-        
-        if config['rnn']['scheduler']['which'] == 'cosine':
-            restart = config['rnn']['scheduler']['cosine_restart_after']
-            scheduler1 = torch.optim.lr_scheduler.ConstantLR(self.optimizer, factor=1, total_iters=restart+restart//2)
-            scheduler2 = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optimizer, T_0=restart)
-            self.scheduler = torch.optim.lr_scheduler.SequentialLR(self.optimizer, schedulers=[scheduler1, scheduler2], milestones=[restart//2])
-        elif config['rnn']['scheduler']['which'] == 'decay':
-            self.scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=0.97)
-        else:
-            print('Scheduler not implemented for GRU')
-            self.scheduler = None
+                            
+        # optimizer
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=config['vae_gp']['lr'], weight_decay=config['vae_gp']['weight_decay'])        
+
+        self.scheduler = None
+
 
     def forward(self, y, n_samples):
         # y is of shape (batch_size, seq_len, input_dim)
@@ -198,10 +212,9 @@ class VAEUnimodal(nn.Module):
         # kl divergence
         kl_x = self.x_encoder.kl_divergence(x_distributions)
         kl_z = self.z_encoder.kl_divergence(z_distributions)
-        kl = kl_x + kl_z
-        # kl = 0
+        kl = kl_x + kl_z        
 
-        return (recon_loss + 0.01*kl)/(batch * num_samples)
+        return (recon_loss + self.beta*kl)/(batch * num_samples)
     
     def extract_relevant(self, vae_output):
         y_recon = vae_output['y_recon'].detach().numpy()
