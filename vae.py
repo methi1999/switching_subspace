@@ -211,23 +211,26 @@ class VAE(nn.Module):
         # if self.neuron_bias is not None:
         #     y_recon = y_recon + self.neuron_bias
         y_recon = nn.Softplus()(y_recon)
-        return y_recon, mu, A, z, x, ()
+        print((y_recon < 1e-20).sum())
+        return {'y_recon': y_recon, 'x_samples': x, 'z_samples': z, 'combined_mean': mu, 'combined_cov': A}        
 
-    def loss(self, y, y_recon, mu, A, misc):
+    def loss(self, y, model_output):
         """
         y and y_recon are of shape [batch * n_samples, time, dim]
         mu and A are of shape [batch, time, z+x] and [batch, time, z+x, z+x]
         """
-        batch, seq, _ = mu.shape
+        y_recon = model_output['y_recon']
+        batch, seq, _ = y.shape
         num_samples = y_recon.shape[0] // batch
 
         # repeat ground truth        
         y = torch.cat([y]*num_samples, dim=0)
         recon_loss = torch.sum(y_recon - y * torch.log(y_recon))
         
+        A, mu = model_output['combined_cov'], model_output['combined_mean']
         # compute AAt
         flattened_A = A.reshape(batch*seq, self.z_dim+self.x_dim, self.z_dim+self.x_dim)        
-        # flattened_A = torch.bmm(flattened_A, torch.transpose(flattened_A, 1, 2))        
+        # flattened_A = torch.bmm(flattened_A, torch.transpose(flattened_A, 1, 2))
         mu = mu.reshape(batch*seq, self.z_dim+self.x_dim)
         # print(cov.shape)
         # poisson loss
@@ -235,29 +238,37 @@ class VAE(nn.Module):
         
         # print((torch.sum(mu.pow(2), dim=1) + torch.einsum("...ii", cov) - mu.shape[1] - torch.log(det+eps)).shape)
         
-        # """
+        """
         # original KL loss
         cov = torch.bmm(flattened_A, torch.transpose(flattened_A, 1, 2))
         det = torch.det(cov)
         kl_loss = 0.5 * torch.sum(torch.sum(mu.pow(2), dim=1) + torch.einsum("...ii", cov) - mu.shape[1] - torch.log(det+eps))
         # print(kl_loss, 'original')
-        # """
+        """
         
-        """        
+        # """        
         # new KL loss
         l, d = mu.shape[0], mu.shape[1]
         mu1 = torch.zeros(l, d)
         sigma1 = torch.eye(d, d).repeat(l, 1, 1)
         p = torch.distributions.MultivariateNormal(mu1, scale_tril=sigma1)
-        q = torch.distributions.MultivariateNormal(mu, scale_tril=flattened_A)
+        cov_mat = torch.bmm(flattened_A, torch.transpose(flattened_A, 1, 2)) + eps*torch.eye(d).unsqueeze(0)
+        q = torch.distributions.MultivariateNormal(mu, covariance_matrix=cov_mat)
         # compute the kl divergence
         kl_loss = torch.distributions.kl_divergence(q, p).sum()
         # print(kl_loss, 'new')
         # return
-        """
+        # """
         
         # print(flattened_A[0])
         return (recon_loss + kl_loss)/(batch*num_samples)
+    
+    def extract_relevant(self, vae_output):
+        y_recon = vae_output['y_recon'].detach().numpy()
+        mean_z = vae_output['combined_mean'][:, :, :self.z_dim].detach().numpy()
+        mean_x = vae_output['combined_mean'][:, :, self.z_dim:].detach().numpy()
+        cov = vae_output['combined_cov'].detach().numpy()
+        return y_recon, mean_x, mean_z, cov, cov, vae_output['x_samples'].detach().numpy(), vae_output['z_samples'].detach().numpy()
     
 
 class PositionalEncoding(nn.Module):
