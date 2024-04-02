@@ -162,7 +162,7 @@ class CNNDecoderIndivdual(nn.Module):
                 
         return torch.cat([x_stim, x_choice], dim=1)        
 
-    def loss(self, predicted, ground_truth, z, reduction='mean'):
+    def loss(self, predicted, ground_truth, reduction='mean'):
         """
         Binary cross entropy loss
         predicted: (batch_size*num_samples, 4)

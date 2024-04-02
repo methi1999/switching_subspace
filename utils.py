@@ -12,6 +12,18 @@ import matplotlib.pyplot as plt
 logger = logging.getLogger(__name__)
 
 
+def extract_mean_covariance(dist):
+    """
+    Extract mean and covariance matrix from distribution object
+    """
+    if isinstance(dist, torch.distributions.Normal):
+        return dist.mean, dist.variance
+    elif isinstance(dist, torch.distributions.MultivariateNormal):
+        return dist.mean, dist.covariance_matrix
+    else:
+        raise ValueError("Distribution type not supported")
+
+
 def plot_curve(model, config, train_losses, test_losses):
     # plot train and test loss
     train_epochs = [x[0] for x in train_losses]

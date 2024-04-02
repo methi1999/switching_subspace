@@ -9,7 +9,7 @@ eps = 1e-6
 # TODO: Make cholesky decomposition work
 
 class VAEParameterised(nn.Module):
-    def __init__(self, config, input_dim, xz_list, neuron_bias=None, init=''):
+    def __init__(self, config, input_dim, xz_list, neuron_bias=None, init='vae_paramz_[1, 1, 1]_8_2_bi_unconstrained'):
         super().__init__()
         # keep only non-zero values in xz_list
         xz_list = [x for x in xz_list if x > 0]
@@ -40,8 +40,13 @@ class VAEParameterised(nn.Module):
         
         bidirectional = True
         hid_dim = hidden_dim
-        self.z_encoder = nn.GRU(input_dim, hid_dim, num_layers=2, batch_first=True,
-                              bidirectional=bidirectional, dropout=dropout if num_layers > 1 else 0)        
+        # self.z_encoder = nn.GRU(input_dim, hid_dim, num_layers=2, batch_first=True,
+        #                       bidirectional=bidirectional, dropout=dropout if num_layers > 1 else 0)        
+        self.z_encoder = nn.Sequential(nn.Linear(input_dim, hid_dim),
+                                       nn.ReLU(),
+                                       nn.Linear(hid_dim, hid_dim),
+                                       nn.ReLU(),                            
+                                       nn.Linear(hid_dim, hid_dim*2 if bidirectional else hid_dim),)
         # self.z_var_entropy = config['rnn']['z_var_entropy']
         # if self.z_var_entropy:
         #     self.z_mean_var = nn.Linear(hidden_dim*2 if bidirectional else hidden_dim, self.z_dim)
@@ -55,8 +60,11 @@ class VAEParameterised(nn.Module):
         # softmax temperature
         self.softmax_temp = config['rnn']['softmax_temp']
 
+        # penalty for variance
+        self.var_penalty = config['rnn']['var_penalty']
+
         # name model
-        self.arch_name = 'vae_paramz_{}_{}_{}'.format(xz_list, hidden_dim, num_layers)
+        self.arch_name = 'vae_paramz_{}_{}_{}_{}'.format(xz_list, hidden_dim, num_layers, self.var_penalty)
         if bidirectional:
             self.arch_name += '_bi'
         if neuron_bias is not None:
@@ -75,6 +83,21 @@ class VAEParameterised(nn.Module):
         else:
             print('Scheduler not implemented for GRU')
             self.scheduler = None
+
+        
+
+        # # init model        
+        # if init is not None:
+        #     try:
+        #         data_des = 'dandi_{}/{}_ms'.format(config['shape_dataset']['id'], int(config['shape_dataset']['win_len']*1000))
+        #         pth = os.path.join(config['dir']['results'], data_des, init, 'best')
+        #         checkpoint = torch.load(pth, map_location=lambda storage, loc: storage)
+        #         # replace encoder in keys with nothing
+        #         checkpoint['model_state_dict'] = {k.replace('vae.', ''): v for k, v in checkpoint['model_state_dict'].items()}
+        #         self.load_state_dict(checkpoint['model_state_dict'])
+        #         print("Loading from pre-trained")
+        #     except:
+        #         print("Failed to load pre-trained")
     
     def split(self, encoded):
         batch, seq, _ = encoded.shape
@@ -106,7 +129,8 @@ class VAEParameterised(nn.Module):
         # x = nn.Tanh()(x)
 
         # obtain z
-        encoded_z, _ = self.z_encoder(y)
+        # encoded_z, _ = self.z_encoder(y)
+        encoded_z = self.z_encoder(y)
         z_out = self.z_mean_var(encoded_z)
         
         # split into 3 across last dimension
@@ -142,7 +166,7 @@ class VAEParameterised(nn.Module):
         # # log_var1, log_var2 = hidden_z[0], hidden_z[1]
         # log_var1 = nn.Sigmoid()(log_var1) * self.log_num_time_bins
         # log_var2 = nn.Sigmoid()(log_var2) * self.log_num_time_bins
-        # # print(log_var1, log_var2)
+        # print(log_var1, log_var2)
         
         # construct gaussian with mean and variance
         z = construct_gaussian(time_bin, log_var1, log_var2, y.shape[1])
@@ -153,7 +177,7 @@ class VAEParameterised(nn.Module):
         # z = nn.Softmax(dim=2)(z/self.softmax_temp)        
         # z = z/(z.sum(dim=2, keepdim=True) + eps)
 
-        # # construct z0 as 1-(z1+z2)/2
+        # # # # construct z0 as 1-(z1+z2)/2
         z0 = 1 - (z[:, :, 0] + z[:, :, 1])/2
         z = torch.stack([z[:, :, 0], z[:, :, 1], z0], dim=2)
         
@@ -168,13 +192,14 @@ class VAEParameterised(nn.Module):
         # if self.neuron_bias is not None:
         #     y_recon = y_recon + self.neuron_bias
         y_recon = nn.Softplus()(y_recon)
-        return y_recon, mu, A, z, x
+        return y_recon, mu, A, z, x, (log_var1, log_var2, time_bin_distribution, z)
 
-    def loss(self, y, y_recon, mu, A, z):
+    def loss(self, y, y_recon, mu, A, misc):
         """
         y and y_recon are of shape [batch * n_samples, time, dim]
         mu and A are of shape [batch, time, z+x] and [batch, time, z+x, z+x]
         """
+        z = misc[-1]
         batch, seq, _ = mu.shape
         num_samples = y_recon.shape[0] // batch
         # compute AAt
@@ -194,6 +219,7 @@ class VAEParameterised(nn.Module):
         det = torch.det(cov)
         kl_loss = 0.5 * torch.sum(torch.sum(mu.pow(2), dim=1) + torch.einsum("...ii", cov) - mu.shape[1] - torch.log(det+eps))
 
+        loss = recon_loss + kl_loss
         # # new KL loss
         # l, d = mu.shape[0], mu.shape[1]
         # mu1 = torch.zeros(l, d)
@@ -207,9 +233,17 @@ class VAEParameterised(nn.Module):
         # z is of shape batch x time x z_dim  
         # l2 = torch.sum((torch.sum(z, dim=2)-1)**2)
         # print(l2.shape)
+
+        log_var1, log_var2 = misc[0], misc[1]
+        # take exponential of log_var
+        log_var1, log_var2 = torch.exp(log_var1), torch.exp(log_var2)
+        # sum
+        loss += torch.sum(log_var1 + log_var2)*self.var_penalty
+
+        loss += torch.sum((1 - torch.sum(z)) ** 2) * 10
         
         # print(flattened_A[0])
-        return (recon_loss + kl_loss)/(batch*num_samples)
+        return loss/(batch*num_samples)
     
 
 def construct_gaussian(x_mean, x_log_var1, x_log_var2, time_bins):

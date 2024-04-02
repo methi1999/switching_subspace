@@ -16,7 +16,8 @@ shape_dataset:
 
 # mention x for stimulus, choice and rest
 dim_x_z: [0, 0, 1, 1, 1]
-# dim_x_z: [0, 1, 1, 1]
+# dim_x_z: [1, 1, 2]
+# dim_x_z: [0, 0, 3]
 
 z_prior:
   include: False
@@ -38,6 +39,7 @@ rnn:
   weight_decay: 0.0001
   smoothing: 0.1
   # z_var_entropy: False
+  # var_penalty: 0
 
   scheduler:
     which: ''
@@ -45,9 +47,9 @@ rnn:
     const_factor: 0.97
 
 decoder:
-  behavior_weight: 5
+  behavior_weight: 10
 
-  stimulus_weight: 2
+  stimulus_weight: 1
   choice_weight: 1
   
   # which: 'cnn_indi'
@@ -56,11 +58,11 @@ decoder:
   
   cnn:
     # channels: [4, 4, 4, 4, 4, 4]
-    channels: [4, 4]
-    kernel_size: 5
-    dropout: 0.1
+    channels: [4]
+    kernel_size: 7
+    dropout: 0.2
     lr: 0.01
-    weight_decay: 0.1
+    weight_decay: 0
 
   rnn:
     layers: 1

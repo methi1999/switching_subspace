@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 from decoder import LinearAccDecoder, CNNDecoder, CNNDecoderIndivdual, RNNDecoderIndivdual
 from vae import VAE
-from vae_param import VAEParameterised
+from vae_family import VAEParameterised
+from vae_unimodal import VAEUnimodal
 import os
 import utils
 from priors import GaussianPrior
@@ -15,7 +16,8 @@ class Model(nn.Module):
         xz_list = config['dim_x_z']
         # vae        
         # self.vae = VAE(config, input_dim, xz_list, neuron_bias)        
-        self.vae = VAEParameterised(config, input_dim, xz_list, neuron_bias)        
+        # self.vae = VAEParameterised(config, input_dim, xz_list, neuron_bias)        
+        self.vae = VAEUnimodal(config, input_dim, xz_list, neuron_bias)
         # print num train params in vae
         print('Number of trainable parameters in VAE:', utils.count_parameters(self.vae))            
             
@@ -66,7 +68,8 @@ class Model(nn.Module):
             os.makedirs(self.final_path)
     
     def forward(self, spikes, n_samples, use_mean_for_decoding=False):
-        y_recon, mu, A, z, x = self.vae(spikes, n_samples)
+        vae_output = self.vae(spikes, n_samples)
+        x, z = vae_output['x_samples'], vae_output['z_samples']
         if self.behavior_decoder:
             if use_mean_for_decoding:
                 behavior = self.behavior_decoder(mu[:, :, self.vae.z_dim:], mu[:, :, :self.vae.z_dim])
@@ -74,37 +77,18 @@ class Model(nn.Module):
                 behavior = self.behavior_decoder(x, z)
         else:
             behavior = None
-        return y_recon, mu, A, z, x, behavior
+        return vae_output, behavior
 
-    def loss(self, epoch, y, y_recon, mu, A, z, x, behavior_pred, behavior_truth):       
+    def loss(self, epoch, spikes_batch, behavior_batch, vae_pred, behavior_pred):
         # loss = torch.tensor(0.0)
-        loss = self.vae.loss(y, y_recon, mu, A, z)
+        loss = self.vae.loss(spikes_batch, vae_pred)
         loss_l = [loss.item()]
         if self.behavior_decoder:
-            behave_loss = self.behavior_weight * self.behavior_decoder.loss(behavior_pred, behavior_truth, z)            
+            behave_loss = self.behavior_weight * self.behavior_decoder.loss(behavior_pred, behavior_batch)            
             loss += behave_loss
             loss_l.append(behave_loss.item())
-        if self.z_prior:
-            for i, z_prior in enumerate(self.prior_modules):
-                z_prior_loss = z_prior.loss(z[:, :, i], mu[:, :, i])
-                loss += z_prior_loss
-                loss_l.append(z_prior_loss.item())
         
         return loss, loss_l
-        
-    # def sample(self, y, n_samples):
-    #     self.forward(y, n_samples)
-    #     # samples_vae = self.vae.sample(y, n_samples)
-    #     # # if behavior decoder is present, sample behavior as well
-    #     # if self.behavior_decoder:
-    #     #     samples_behavior = []
-    #     #     for i in range(n_samples):
-    #     #         _, _, (z, x) = samples_vae[i]
-    #     #         behavior = self.behavior_decoder(x, z)
-    #     #         samples_behavior.append(behavior)
-    #     #     return samples_vae, samples_behavior
-    #     # else:
-    #     #     return samples_vae, [None for _ in range(n_samples)]
     
     def optim_step(self, train_decoder):
         self.vae.optimizer.step()

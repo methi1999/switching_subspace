@@ -6,7 +6,6 @@ import math
 import os
 
 eps = 1e-6
-# TODO: Make cholesky decomposition work
 
 class VAE(nn.Module):
     def __init__(self, config, input_dim, xz_list, neuron_bias=None, init='vae_[1, 1, 1]_8_2_bi_standard'):
@@ -22,9 +21,9 @@ class VAE(nn.Module):
         self.x_dim = sum(xz_list)
         self.z_dim = len(xz_list)
         output_dim = (self.z_dim + self.x_dim)*(self.z_dim + self.x_dim + 1)
-        # cholesky mask
+        # # cholesky mask
         # self.cholesky_mask = torch.tril(torch.ones(self.z_dim+self.x_dim, self.z_dim+self.x_dim))
-        # # set diagonal to 0
+        # # # set diagonal to 0
         # self.cholesky_mask = self.cholesky_mask - torch.diag_embed(torch.diagonal(self.cholesky_mask))
         # self.cholesky_mask = self.cholesky_mask.unsqueeze(0)
 
@@ -169,11 +168,11 @@ class VAE(nn.Module):
         # # cholesky: make only diagonal positive
         # # first reshape A to (batch*seq, z+x, z+x)
         # A = A.reshape(batch*seq, self.z_dim+self.x_dim, self.z_dim+self.x_dim)        
-        # diag = torch.diagonal(A, dim1=-2, dim2=-1)
-        # diag = nn.Softplus()(diag)        
+        # diag = torch.diagonal(A, dim1=-2, dim2=-1)        
+        # diag = nn.Softplus()(diag)
         # A = A * self.cholesky_mask + torch.diag_embed(diag)        
         # # reshape it back
-        # A = A.reshape(batch, seq, self.z_dim+self.x_dim, self.z_dim+self.x_dim)
+        # A = A.reshape(batch, seq, self.z_dim+self.x_dim, self.z_dim+self.x_dim)        
                 
         # # smooth means        
         # if self.moving_average is not None:
@@ -212,15 +211,20 @@ class VAE(nn.Module):
         # if self.neuron_bias is not None:
         #     y_recon = y_recon + self.neuron_bias
         y_recon = nn.Softplus()(y_recon)
-        return y_recon, mu, A, z, x
+        return y_recon, mu, A, z, x, ()
 
-    def loss(self, y, y_recon, mu, A, z):
+    def loss(self, y, y_recon, mu, A, misc):
         """
         y and y_recon are of shape [batch * n_samples, time, dim]
         mu and A are of shape [batch, time, z+x] and [batch, time, z+x, z+x]
         """
         batch, seq, _ = mu.shape
         num_samples = y_recon.shape[0] // batch
+
+        # repeat ground truth        
+        y = torch.cat([y]*num_samples, dim=0)
+        recon_loss = torch.sum(y_recon - y * torch.log(y_recon))
+        
         # compute AAt
         flattened_A = A.reshape(batch*seq, self.z_dim+self.x_dim, self.z_dim+self.x_dim)        
         # flattened_A = torch.bmm(flattened_A, torch.transpose(flattened_A, 1, 2))        
@@ -228,25 +232,29 @@ class VAE(nn.Module):
         # print(cov.shape)
         # poisson loss
         # print(y.shape, y_recon.shape)
-        # repeat ground truth        
-        y = torch.cat([y]*num_samples, dim=0)
-        recon_loss = torch.sum(y_recon - y * torch.log(y_recon))
+        
         # print((torch.sum(mu.pow(2), dim=1) + torch.einsum("...ii", cov) - mu.shape[1] - torch.log(det+eps)).shape)
         
+        # """
         # original KL loss
         cov = torch.bmm(flattened_A, torch.transpose(flattened_A, 1, 2))
         det = torch.det(cov)
         kl_loss = 0.5 * torch.sum(torch.sum(mu.pow(2), dim=1) + torch.einsum("...ii", cov) - mu.shape[1] - torch.log(det+eps))
-
-        # # new KL loss
-        # l, d = mu.shape[0], mu.shape[1]
-        # mu1 = torch.zeros(l, d)
-        # sigma1 = torch.eye(d, d).repeat(l, 1, 1)
-        # p = torch.distributions.MultivariateNormal(mu1, scale_tril=sigma1)
-        # q = torch.distributions.MultivariateNormal(mu, scale_tril=flattened_A)        
-        # # compute the kl divergence
-        # kl_loss = torch.distributions.kl_divergence(p, q).sum()
-        # kl_loss = 0        
+        # print(kl_loss, 'original')
+        # """
+        
+        """        
+        # new KL loss
+        l, d = mu.shape[0], mu.shape[1]
+        mu1 = torch.zeros(l, d)
+        sigma1 = torch.eye(d, d).repeat(l, 1, 1)
+        p = torch.distributions.MultivariateNormal(mu1, scale_tril=sigma1)
+        q = torch.distributions.MultivariateNormal(mu, scale_tril=flattened_A)
+        # compute the kl divergence
+        kl_loss = torch.distributions.kl_divergence(q, p).sum()
+        # print(kl_loss, 'new')
+        # return
+        """
         
         # print(flattened_A[0])
         return (recon_loss + kl_loss)/(batch*num_samples)

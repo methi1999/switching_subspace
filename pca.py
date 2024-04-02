@@ -43,6 +43,7 @@ behaviour_data = np.stack((stim, choice), axis=1)
 behaviour_data = torch.tensor(behaviour_data, dtype=torch.long)
 # behaviour_data = torch.tensor(behaviour_data, dtype=torch.float32)
 spikes = torch.tensor(spikes, dtype=torch.float32)
+spikes = spikes[:, -10:, :]
 
 # %%
 # create dataloader with random sampling for training and testing
@@ -92,7 +93,7 @@ spikes_train_np = spikes_train.detach().numpy()
 # y_recon_test_np = y_recon_test.detach().numpy()
 
 # do pca on train and test data
-pca = PCA(n_components=5)
+pca = PCA(n_components=1)
 trials_train, num_neurons = len(spikes_train), spikes_train[0].shape[1]
 trials_test = len(spikes_test)
 pca.fit(spikes_train.reshape(-1, num_neurons))
