@@ -210,8 +210,7 @@ class VAE(nn.Module):
 
         # if self.neuron_bias is not None:
         #     y_recon = y_recon + self.neuron_bias
-        y_recon = nn.Softplus()(y_recon)
-        print((y_recon < 1e-20).sum())
+        y_recon = nn.Softplus()(y_recon)        
         return {'y_recon': y_recon, 'x_samples': x, 'z_samples': z, 'combined_mean': mu, 'combined_cov': A}        
 
     def loss(self, y, model_output):

@@ -3,10 +3,12 @@ import torch.nn as nn
 from decoder import LinearAccDecoder, CNNDecoder, CNNDecoderIndivdual, RNNDecoderIndivdual
 from vae import VAE
 from vae_family import VAEParameterised
-from vae_gp import VAEGP
+from vae_gp_separate import VAEGP
 import os
 import utils
 from priors import GaussianPrior
+from vae_gp import VAEGPCombined
+
 
 class Model(nn.Module):
     def __init__(self, config, input_dim, neuron_bias=None):
@@ -22,6 +24,8 @@ class Model(nn.Module):
             self.vae = VAEParameterised(config, input_dim, xz_list, neuron_bias)        
         elif which_vae == 'vae_gp':
             self.vae = VAEGP(config, input_dim, xz_list, neuron_bias)
+        elif which_vae == 'vae_gp_combined':
+            self.vae = VAEGPCombined(config, input_dim, xz_list, neuron_bias)
         else:
             raise ValueError("Unknown VAE type")
         # print num train params in vae

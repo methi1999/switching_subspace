@@ -41,7 +41,7 @@ spikes = torch.tensor(spikes).float()
 # split data
 # create dataloader with random sampling for training and testing
 # split data into training and testing
-behaviour_data_train, behaviour_data_test, spikes_train, spikes_test = train_test_split(behaviour_data, spikes, test_size=0.3, random_state=42)
+behaviour_data_train, behaviour_data_test, spikes_train, spikes_test = train_test_split(behaviour_data, spikes, test_size=0.2, random_state=7)
 # transfer to device
 behaviour_data_train, behaviour_data_test = behaviour_data_train.to(device), behaviour_data_test.to(device)
 spikes_train, spikes_test = spikes_train.to(device), spikes_test.to(device)
@@ -54,59 +54,64 @@ test_dataset = TensorDataset(behaviour_data_test, spikes_test)
 neuron_bias = torch.mean(spikes_train, dim=0)
 
 
-def test(model: Model, test_loader, n_samples=200):
+def test(model, test_loader, n_samples):
     model.eval()
     test_loss = 0
     with torch.no_grad():
         for _, (behavior_batch, spikes_batch) in enumerate(test_loader):
-            samples_xz, samples_behavior = model.sample(spikes_batch, n_samples=n_samples)
-            # l = []
-            for i in range(len(samples_xz)):
-                y_recon, (mu, A), (z, x) = samples_xz[i]
-                behavior_batch_pred = samples_behavior[i]
-                # calculate loss
-                _, loss_l = model.loss(None, spikes_batch, y_recon, mu, A, z, x, behavior_batch_pred, behavior_batch)
-                # l.append(loss_l[1])
-                test_loss += np.array(loss_l)            
+            vae_pred, behavior_pred = model(spikes_batch, n_samples=n_samples)
+            # calculate loss
+            loss, loss_l = model.loss(None, spikes_batch, behavior_batch, vae_pred, behavior_pred)
+            # l.append(loss_l[1])
+            test_loss += np.array(loss_l)            
             # print(np.mean(l), np.std(l))
     # divide loss by total number of samples in dataloader    
-    return test_loss/(len(test_loader) * n_samples)
+    return test_loss/len(test_loader)
 
 
-def train(config, model: Model, train_loader, val_loader):
+def train(config, model: Model, train_loader, val_loader, early_stop):   
     train_losses, test_losses = [], []
-    test_every = config['test_every']
-    num_epochs = config['epochs']
-    early_stop = EarlyStopping(patience=config['early_stop']['patience'], delta=config['early_stop']['delta'],
-                            trace_func=print)
-    save_model = False
-    for epoch in range(num_epochs):
-        # print(model.behavior_decoder.scheduler.get_last_lr())
+    test_every = config['test_every']    
+    train_decoder_after = config['decoder']['train_decoder_after']    
+    num_samples_train = config['num_samples_train']
+    save_model = True    
+    for epoch in range(config['epochs']):
         # forward pass
+        # print(model.behavior_decoder.scheduler.get_last_lr())
+        # model.vae.scheduler.get_last_lr()
         epoch_loss = 0
+        model.train()
         for i, (behavior_batch, spikes_batch) in enumerate(train_loader):            
-            model.train()
-            y_recon, (mu, A), (z, x), behavior_pred = model(spikes_batch)
-            loss, loss_l = model.loss(epoch, spikes_batch, y_recon, mu, A, z, x, behavior_pred, behavior_batch)        
+            # behavior_batch = behavior_batch.long()
+            vae_pred, behavior_pred = model(spikes_batch, n_samples=num_samples_train)
+            # calculate loss
+            loss, loss_l = model.loss(epoch, spikes_batch, behavior_batch, vae_pred, behavior_pred)
             # backward pass
             model.optim_zero_grad()
             loss.backward()
-            model.optim_step()
+            # print gradient of any weight
+            # if epoch > 10:
+            #     print(model.behavior_decoder.conv_choice[1].weight.grad)            
+            model.optim_step(train_decoder = epoch >= train_decoder_after)                
             epoch_loss += np.array(loss_l)
-
+        
+        # if epoch % 100 == 0:
+        #     # print lr of decoder
+        #     print(model.behavior_decoder.scheduler.get_last_lr())
         train_losses.append((epoch, epoch_loss/len(train_loader)))
-        model.scheduler_step(epoch)
+        model.scheduler_step(step_decoder = epoch >= train_decoder_after)
         # test loss
         if (epoch+1) % test_every == 0:            
-            test_loss = test(model, val_loader)
-            sum_test_loss = np.sum(test_loss)
+            # test_loss = test(model, val_loader, n_samples=config['num_samples_test'])
+            # sum_test_loss = np.sum(test_loss)
             # scheduler.step(sum_test_loss)
-            test_losses.append((epoch, test_loss))            
-            if only_look_at_decoder:
-                early_stop(test_loss[-1], model, save_model=save_model, save_prefix='best')
-            else:
-                early_stop(sum_test_loss, model, save_model=save_model, save_prefix='best')
-            print('Epoch [{}/{}], Train Loss: {}, Test Loss: {}, Best Loss: {}'.format(epoch+1, num_epochs, train_losses[-1][1], test_losses[-1][1], early_stop.best_score))
+            # test_losses.append((epoch, test_loss))
+            # early_stop(sum_test_loss, model, save_model=save_model, save_prefix='best')
+            early_stop(train_losses[-1][-1], model, save_model=False, save_prefix='best')
+            # model.save_model(save_prefix=str(epoch))
+
+            # print('Epoch [{}/{}], Train Loss: {}, Test Loss: {}, Best Loss: {}'.format(epoch+1, config['epochs'], train_losses[-1][1], test_losses[-1][1], early_stop.best_score))
+            print('Epoch [{}/{}], Train Loss: {}'.format(epoch+1, config['epochs'], train_losses[-1][1]))
             if early_stop.slow_down:
                 test_every = config['early_stop']['test_every_new']
             else:
@@ -114,34 +119,27 @@ def train(config, model: Model, train_loader, val_loader):
             if early_stop.early_stop:
                 print("Early stopping")
                 break
-    # utils.plot_curve(model, config, train_losses, test_losses)
-    only_test_loss = [x[1][1] for x in test_losses]
-    # if only_look_at_decoder:
-    #     only_test_loss = [x[1][1] for x in test_losses]
-    # else:
-    #     only_test_loss = [np.sum(x[1]) for x in test_losses]
+            
+    
+    # to_consider = [np.sum(x[1]) for x in test_losses]
+    to_consider = [x[1] for x in train_losses]
     
     # compute min test loss and return it    
-    # return np.min(only_test_loss), train_losses, test_losses
-    
-    # compute median of test loss in a window of 15
-    meds = []
-    window = 5
-    only_test_loss = [np.nan]*(window) + only_test_loss + [np.nan]*(window)
-    for i in range(window, len(only_test_loss)-window):
-        meds.append(np.nanmean(only_test_loss[i-window:i+window]))
-    return np.min(meds), train_losses, test_losses
+    return np.min(to_consider), train_losses, test_losses
 
 
 def one_train(config, device):        
     # create model and optimizer
-    model = Model(config, input_dim=emissions_dim).to(device)
+    config['test_every'] = 1
+    model = Model(config, input_dim=emissions_dim) #, neuron_bias=neuron_bias
+    # model = torch.compile(model)
+    early_stop = EarlyStopping(patience=config['early_stop']['patience'], delta=config['early_stop']['delta'], trace_func=print)
     # create dataloaders
     batch_size = config['batch_size']
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
     # train
-    best_test_loss, train_losses, test_losses = train(config, model, train_loader, test_loader)
+    best_test_loss, train_losses, test_losses = train(config, model, train_loader, test_loader, early_stop)
     # utils.plot_curve(model, config, train_losses, test_losses)
     # save losses
     pth = utils.model_store_path(config, model.arch_name)
@@ -154,41 +152,53 @@ def one_train(config, device):
 # create optuna function
 def objective_(trial):
     config = deepcopy(config_global)    
+
     # config['rnn']['hidden_size'] = trial.suggest_categorical('hidden_size', [24, 32, 48])
-    config['rnn']['hidden_size'] = trial.suggest_categorical('hidden_size', [24, 32, 48])
-    config['rnn']['num_layers'] = trial.suggest_categorical('num_layers', [1, 2])        
-    # config['rnn']['num_layers'] = 1       
-    config['rnn']['dropout'] = trial.suggest_float('dropout', 0.1, 0.4)
+    config['vae_gp']['rnn_encoder']['hidden_size'] = trial.suggest_categorical('hidden_size', [8, 24])
+    config['vae_gp']['rnn_encoder']['num_layers'] = trial.suggest_categorical('num_layers', [1, 2, 3])        
+    config['vae_gp']['lr'] = trial.suggest_float('lr', 1e-4, 0.1, log=True)
+    config['vae_gp']['kl_beta'] = 0.01
+    config['vae_gp']['smoothing_sigma'] = None
+    # config['rnn_encoder']['num_layers'] = 1       
+    # config['vae_gp']['rnn_encoder']['dropout'] = trial.suggest_float('dropout', 0.1, 0.4)
     # config['rnn']['dropout'] = 0.15
-    config['batch_size'] = trial.suggest_categorical('batch_size', [32, 48, 96])    
+
+    num_layers = trial.suggest_categorical('num_layers', [1, 2, 3])
+    num_units = trial.suggest_categorical('num_units', [8, 16])
+    config['vae_gp']['post_rnn_linear']['hidden_dims'] = [num_units]*num_layers
+
+    config['batch_size'] = trial.suggest_categorical('batch_size', [8, 32, 96])
+    config['num_samples_train'] = trial.suggest_categorical('num_samples_train', [10, 50])
+
+
     # config['batch_size'] = 48
     # config['decoder']['cnn']['lr'] = trial.suggest_float('cnn_lr', 1e-5, 0.1, log=True)
-    config['decoder']['cnn']['lr'] = trial.suggest_float('cnn_lr', 1e-4, 0.1, log=True)
-    config['decoder']['cnn']['kernel_size'] = trial.suggest_categorical('kernel_size', [3, 5, 9])        
-    config['decoder']['cnn']['dropout'] = trial.suggest_float('dropout_cnn', 0.1, 0.5)
+    # config['decoder']['cnn']['lr'] = trial.suggest_float('cnn_lr', 1e-4, 0.1, log=True)
+    # config['decoder']['cnn']['kernel_size'] = trial.suggest_categorical('kernel_size', [3, 5, 9])        
+    # config['decoder']['cnn']['dropout'] = trial.suggest_float('dropout_cnn', 0.1, 0.5)
     # config['decoder']['cnn']['dropout'] = 0.25
     # chans = trial.suggest_categorical('channels', [6, 12])
-    chans = trial.suggest_categorical('channels', [4, 8, 16])
+    # chans = trial.suggest_categorical('channels', [4, 8, 16])
     # chans = 8
-    layers = trial.suggest_categorical('lay', [2, 4, 6])
-    config['decoder']['cnn']['channels'] = [chans]*layers    
+    # layers = trial.suggest_categorical('lay', [2, 4, 6])
+    # config['decoder']['cnn']['channels'] = [chans]*layers    
 
-    res = []
-    for _ in range(3):
-        utils.set_seeds(np.random.randint(1000))
-        res.append(one_train(config, device))
-    return np.mean(res)    
+    return one_train(config, device)
 
 
 def exp():    
-    study_name = 'results/stim'  # Unique identifier of the study    
-    config_global['dir']['results'] = 'results/stim/'
+    study_name = 'results/vae_gp_combined'  # Unique identifier of the study    
+    config_global['dir']['results'] = 'results/vae_gp_combined/'
+    # study_name = 'results/full_cov'  # Unique identifier of the study    
+    # config_global['dir']['results'] = 'results/full_cov/'
+    config_global['vae_gp']['full_cov'] = False
+
     if not os.path.exists(study_name + '.db'):
         study = optuna.create_study(study_name=study_name, storage='sqlite:///' + study_name + '.db', direction="minimize")
     else:
         study = optuna.load_study(study_name=study_name, storage='sqlite:///' + study_name + '.db')
     
-    # study.optimize(objective_, n_trials=400)
+    study.optimize(objective_, n_trials=100)
     df = study.trials_dataframe()
     df.to_csv(open(study_name + ".csv", 'w'), index=False, header=True)
 
