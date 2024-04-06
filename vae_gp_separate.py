@@ -16,22 +16,12 @@ def get_linear(inp, out, hidden, dropout):
             layers.append(nn.Linear(inp, hidden[i]))
         else:
             layers.append(nn.Linear(hidden[i-1], hidden[i]))
-        layers.append(nn.ReLU())
+        layers.append(nn.ReLU())        
         layers.append(nn.Dropout(dropout))
     layers.append(nn.Linear(hidden[-1], out))            
     return layers
 
-def derivative_time_series(x):
-    # x is of shape (batch, dim, time)
-    # return derivative of x
-    # pad x with zeros on both sides
-    x = torch.cat([torch.zeros(x.shape[0], x.shape[1], 1, device=x.device), x, torch.zeros(x.shape[0], x.shape[1], 1, device=x.device)], dim=1)
-    # take difference
-    dx = x[:, :, 2:] - x[:, :, :-2]
-    return dx
 
-def normal_cdf(x, nu):
-    return 0.5 * (1 + torch.erf(x * nu))
 
 def rbf_kernel(time, sigma):
     # sigma is a scalar, time is number of bins
@@ -66,9 +56,9 @@ def block_diag_precision(diag_elems, off_diag_elems, mean):
     a_2 = diag_elems**2
     b_2 = torch.cat([torch.zeros(batch, 1, device=device), off_diag_elems**2], dim=1)
     ab = diag_elems[:, :-1] * off_diag_elems            
-    prec += torch.diag_embed(a_2+b_2, dim1=-2, dim2=-1)
+    prec += torch.diag_embed(a_2+b_2+1, dim1=-2, dim2=-1)
     off_diagonal = torch.diag_embed(ab, offset=1, dim1=-2, dim2=-1)            
-    prec += off_diagonal + off_diagonal.transpose(-2, -1) + eps * torch.eye(time, device=device).unsqueeze(0)            
+    prec += off_diagonal + off_diagonal.transpose(-2, -1) + eps * torch.eye(time, device=device).unsqueeze(0)
     # """
     return torch.distributions.MultivariateNormal(mean, precision_matrix=prec)
    

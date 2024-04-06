@@ -155,7 +155,7 @@ class Model(nn.Module):
             filename = os.path.join(base_path, 'best')
 
         # load model parameters
-        checkpoint = torch.load(filename, map_location=lambda storage, loc: storage)
+        checkpoint = torch.load(filename, map_location=lambda storage, loc: storage)        
         self.load_state_dict(checkpoint['model_state_dict'], strict=strict)
         # module.optimizer.load_state_dict(checkpoint['optimizer_state_dict'], strict=strict)
         print("Loaded model")

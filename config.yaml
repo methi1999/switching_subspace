@@ -21,18 +21,19 @@ dim_x_z: [0, 0, 1, 1, 1]
 
 
 which_vae: 'vae_gp_combined' # baseline or vae_gp
+# which_vae: 'baseline' # baseline or vae_gp
 
 vae_baseline:
   rnn:  
     bidirectional: True
     hidden_size: 8
-    num_layers: 1
+    num_layers: 2
     dropout: 0.1
     softmax_temp: 1    
   
   # smoothing: 0.1
   lr: 0.01
-  weight_decay: 0.0001
+  weight_decay: 0.01
 
   scheduler:
     which: ''
@@ -41,23 +42,29 @@ vae_baseline:
 
 vae_gp:
   
-  full_cov: False
+  cov_type: 'diagonal' # full, banded or diagonal for z
   
   rnn_encoder:
     bidirectional: True
     hidden_size: 8
-    num_layers: 3
-    dropout: 0
+    num_layers: 2
+    dropout: 0.1
   
   post_rnn_linear:
-    hidden_dims: [16]
+    hidden_dims: []
     dropout: 0
 
-  smoothing_sigma:
-  weight_decay: 0
-  kl_beta: 0.001
+  smoothing_sigma: 
+  kl_beta: 1
+  weight_decay: 0.01
 
-  lr: 0.001
+  lr: 0.01
+
+  monotonic:
+    use: False    
+    nu_z: 5
+    nu_g: 1
+    coeff: 100
 
 decoder:
   behavior_weight: 10
@@ -104,9 +111,10 @@ epochs: 1000
 test_every: 20
 plot_every: 5
 
-batch_size: 64
+batch_size: 192
+optim_size: 192
 
-num_samples_train: 10
+num_samples_train: 50
 num_samples_test: 20
 
 

@@ -2,11 +2,11 @@
 
 #SBATCH --account=gts-awu36                   # account to which job is charged, ex: GT-gburdell3
 #SBATCH -J vae               # name of job
-#SBATCH -N1 --ntasks-per-node=4
+#SBATCH -N1 --ntasks-per-node=1
 #SBATCH --mem-per-cpu=4G                        # Memory per core 
 #SBATCH -q embers                     # job is submitted to inferno queue
 #SBATCH -oRes-%j.out
-#SBATCH --mail-type=ALL
+#SBATCH --mail-type=NONE
 #SBATCH --time 08:00:00
 
 echo "Started on `/bin/hostname`" 
@@ -15,4 +15,5 @@ module load anaconda3/2021.05
 conda activate whisker
 cd $SLURM_SUBMIT_DIR
 
-python hyperparam.py
+# srun runs it as many timeas as n-tasks-per-node 
+srun python hyperparam.py 

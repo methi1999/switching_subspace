@@ -129,6 +129,8 @@ class VAE(nn.Module):
         batch, seq, _ = encoded.shape
         mu = encoded[:, :, :self.z_dim+self.x_dim]
         A = encoded[:, :, self.z_dim+self.x_dim:].reshape(batch, seq, self.z_dim+self.x_dim, self.z_dim+self.x_dim)
+        # # make A diagonal
+        # A = A * torch.eye(A.shape[2]).unsqueeze(0)
         return mu, A
     
     def reparameterize(self, mu, A):
@@ -211,7 +213,7 @@ class VAE(nn.Module):
         # if self.neuron_bias is not None:
         #     y_recon = y_recon + self.neuron_bias
         y_recon = nn.Softplus()(y_recon)        
-        return {'y_recon': y_recon, 'x_samples': x, 'z_samples': z, 'combined_mean': mu, 'combined_cov': A}        
+        return {'y_recon': y_recon, 'x_samples': x, 'z_samples': z, 'combined_mean': mu, 'combined_A': A}        
 
     def loss(self, y, model_output):
         """
@@ -226,7 +228,7 @@ class VAE(nn.Module):
         y = torch.cat([y]*num_samples, dim=0)
         recon_loss = torch.sum(y_recon - y * torch.log(y_recon))
         
-        A, mu = model_output['combined_cov'], model_output['combined_mean']
+        A, mu = model_output['combined_A'], model_output['combined_mean']
         # compute AAt
         flattened_A = A.reshape(batch*seq, self.z_dim+self.x_dim, self.z_dim+self.x_dim)        
         # flattened_A = torch.bmm(flattened_A, torch.transpose(flattened_A, 1, 2))
@@ -237,15 +239,16 @@ class VAE(nn.Module):
         
         # print((torch.sum(mu.pow(2), dim=1) + torch.einsum("...ii", cov) - mu.shape[1] - torch.log(det+eps)).shape)
         
-        """
+        # """
         # original KL loss
         cov = torch.bmm(flattened_A, torch.transpose(flattened_A, 1, 2))
         det = torch.det(cov)
         kl_loss = 0.5 * torch.sum(torch.sum(mu.pow(2), dim=1) + torch.einsum("...ii", cov) - mu.shape[1] - torch.log(det+eps))
+        # kl_loss = 0
         # print(kl_loss, 'original')
-        """
+        # """
         
-        # """        
+        """        
         # new KL loss
         l, d = mu.shape[0], mu.shape[1]
         mu1 = torch.zeros(l, d)
@@ -257,7 +260,7 @@ class VAE(nn.Module):
         kl_loss = torch.distributions.kl_divergence(q, p).sum()
         # print(kl_loss, 'new')
         # return
-        # """
+        """
         
         # print(flattened_A[0])
         return (recon_loss + kl_loss)/(batch*num_samples)
@@ -266,7 +269,10 @@ class VAE(nn.Module):
         y_recon = vae_output['y_recon'].detach().numpy()
         mean_z = vae_output['combined_mean'][:, :, :self.z_dim].detach().numpy()
         mean_x = vae_output['combined_mean'][:, :, self.z_dim:].detach().numpy()
-        cov = vae_output['combined_cov'].detach().numpy()
+        A = vae_output['combined_A'].detach()
+        batch, time, dim, dim = A.shape
+        flat_A = A.reshape(batch*time, dim, dim)    
+        cov = torch.bmm(flat_A, torch.transpose(flat_A, 1, 2)).detach().view(batch, time, dim, dim).numpy()
         return y_recon, mean_x, mean_z, cov, cov, vae_output['x_samples'].detach().numpy(), vae_output['z_samples'].detach().numpy()
     
 

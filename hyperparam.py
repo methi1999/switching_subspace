@@ -99,19 +99,19 @@ def train(config, model: Model, train_loader, val_loader, early_stop):
         #     # print lr of decoder
         #     print(model.behavior_decoder.scheduler.get_last_lr())
         train_losses.append((epoch, epoch_loss/len(train_loader)))
-        model.scheduler_step(step_decoder = epoch >= train_decoder_after)
+        # model.scheduler_step(step_decoder = epoch >= train_decoder_after)
         # test loss
         if (epoch+1) % test_every == 0:            
-            # test_loss = test(model, val_loader, n_samples=config['num_samples_test'])
-            # sum_test_loss = np.sum(test_loss)
+            test_loss = test(model, val_loader, n_samples=config['num_samples_test'])
+            sum_test_loss = np.sum(test_loss)
             # scheduler.step(sum_test_loss)
-            # test_losses.append((epoch, test_loss))
-            # early_stop(sum_test_loss, model, save_model=save_model, save_prefix='best')
-            early_stop(train_losses[-1][-1], model, save_model=False, save_prefix='best')
+            test_losses.append((epoch, test_loss))
+            early_stop(sum_test_loss, model, save_model=save_model, save_prefix='best')
+            # early_stop(train_losses[-1][-1], model, save_model=False, save_prefix='best')
             # model.save_model(save_prefix=str(epoch))
 
-            # print('Epoch [{}/{}], Train Loss: {}, Test Loss: {}, Best Loss: {}'.format(epoch+1, config['epochs'], train_losses[-1][1], test_losses[-1][1], early_stop.best_score))
-            print('Epoch [{}/{}], Train Loss: {}'.format(epoch+1, config['epochs'], train_losses[-1][1]))
+            print('Epoch [{}/{}], Train Loss: {}, Test Loss: {}, Best Loss: {}'.format(epoch+1, config['epochs'], train_losses[-1][1], test_losses[-1][1], early_stop.best_score))
+            # print('Epoch [{}/{}], Train Loss: {}'.format(epoch+1, config['epochs'], train_losses[-1][1]))
             if early_stop.slow_down:
                 test_every = config['early_stop']['test_every_new']
             else:
@@ -121,8 +121,8 @@ def train(config, model: Model, train_loader, val_loader, early_stop):
                 break
             
     
-    # to_consider = [np.sum(x[1]) for x in test_losses]
-    to_consider = [x[1] for x in train_losses]
+    to_consider = [np.sum(x[1]) for x in test_losses]
+    # to_consider = [x[1] for x in train_losses]
     
     # compute min test loss and return it    
     return np.min(to_consider), train_losses, test_losses
@@ -130,7 +130,6 @@ def train(config, model: Model, train_loader, val_loader, early_stop):
 
 def one_train(config, device):        
     # create model and optimizer
-    config['test_every'] = 1
     model = Model(config, input_dim=emissions_dim) #, neuron_bias=neuron_bias
     # model = torch.compile(model)
     early_stop = EarlyStopping(patience=config['early_stop']['patience'], delta=config['early_stop']['delta'], trace_func=print)
@@ -147,15 +146,30 @@ def one_train(config, device):
         pickle.dump((best_test_loss, train_losses, test_losses), f)
     return best_test_loss
    
+def loop_fixed(self):
+    config = deepcopy(config_global)
+    config['vae_gp']['rnn_encoder']['num_layers'] = 2
+    config['vae_gp']['rnn_encoder']['hidden_size'] = 8
+    config['vae_gp']['lr'] = 0.02
+    config['vae_gp']['post_rnn_linear']['hidden_dims'] = [16]
 
+    config['batch_size'] = 8
+    config['optim_size'] = 192
+    config['num_samples_train'] = 100
+
+    for kl_beta in [0, 0.0001, 0.01, 0.5]:
+        config['vae_gp']['kl_beta'] = kl_beta
+        for smoothing_sig in [None, 0.1, 0.5, 1, 3]:
+            config['vae_gp']['smoothing_sigma'] = smoothing_sig
+            one_train(config, device)        
 
 # create optuna function
 def objective_(trial):
-    config = deepcopy(config_global)    
+    config = deepcopy(config_global)
 
     # config['rnn']['hidden_size'] = trial.suggest_categorical('hidden_size', [24, 32, 48])
     config['vae_gp']['rnn_encoder']['hidden_size'] = trial.suggest_categorical('hidden_size', [8, 24])
-    config['vae_gp']['rnn_encoder']['num_layers'] = trial.suggest_categorical('num_layers', [1, 2, 3])        
+    config['vae_gp']['rnn_encoder']['num_layers'] = trial.suggest_categorical('num_layers_rnn', [1, 2, 3])        
     config['vae_gp']['lr'] = trial.suggest_float('lr', 1e-4, 0.1, log=True)
     config['vae_gp']['kl_beta'] = 0.01
     config['vae_gp']['smoothing_sigma'] = None
@@ -198,11 +212,12 @@ def exp():
     else:
         study = optuna.load_study(study_name=study_name, storage='sqlite:///' + study_name + '.db')
     
-    study.optimize(objective_, n_trials=100)
+    # study.optimize(objective_, n_trials=100)
     df = study.trials_dataframe()
     df.to_csv(open(study_name + ".csv", 'w'), index=False, header=True)
 
 
 if __name__ == '__main__':
 #     one_train(config_global, device)
-    exp()
+    # exp()
+    loop_fixed(config_global)
