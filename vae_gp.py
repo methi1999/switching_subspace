@@ -4,11 +4,10 @@ import math
 import os
 import matplotlib.pyplot as plt
 import numpy as np
-from vae_gp_separate import rbf_kernel, block_diag_precision, get_linear
 
 
 eps = 1e-4
-
+USING_TORCH_DIST = False
 
 def derivative_time_series(x):    
     # x is of shape (batch, time, dim)
@@ -24,13 +23,81 @@ def normal_cdf(x, nu):
     return torch.clip(0.5 * (1 + torch.erf(x * nu)), min=eps)
 
 
+
+def get_linear(inp, out, hidden, dropout):
+    if len(hidden) == 0:
+        return [nn.Linear(inp, out)]
+    layers = []
+    for i in range(len(hidden)):
+        if i == 0:
+            layers.append(nn.Linear(inp, hidden[i]))
+        else:
+            layers.append(nn.Linear(hidden[i-1], hidden[i]))
+        layers.append(nn.ReLU())        
+        layers.append(nn.Dropout(dropout))
+    layers.append(nn.Linear(hidden[-1], out))            
+    return layers
+
+
+
+def rbf_kernel(time, sigma):
+    # sigma is a scalar, time is number of bins
+    # return kernel of shape (time, time)
+    time_range = torch.arange(time).unsqueeze(0).float()
+    time_diff = time_range - time_range.t()
+    kernel = torch.exp(-time_diff**2 / (2 * sigma**2))    
+    return kernel
+
+# def normal_likelihood(x, mu, cov_det, inv):
+#     # x, mu are of shape (batch, dim)
+#     # cov is of shape (batch, dim, dim)
+#     # return likelihood of shape (batch)
+#     dim = x.shape[-1]    
+#     # calculate exponent
+#     exponent = -0.5 * torch.sum((x - mu).unsqueeze(-1) * torch.bmm(inv, (x - mu).unsqueeze(-1)), dim=(1, 2))
+#     # calculate constant
+#     constant = 1 / ((2 * math.pi)**(dim/2) * torch.sqrt(cov_det))
+#     return constant * torch.exp(exponent)    
+
+
+def block_diag_precision(diag_elems, off_diag_elems, mean):
+    """
+    # fill elements
+    prec = torch.diag_embed(diag_elems) + torch.diag_embed(off_diag_elems, offset=1, dim1=-2, dim2=-1)
+    # take product of transpose
+    prec = torch.bmm(prec.transpose(1, 2), prec)# + eps * torch.eye(prec.shape[-1], device=prec.device)
+    """
+    # """
+    batch, time = diag_elems.shape
+    device = diag_elems.device
+    prec = torch.zeros(batch, time, time, device=device)
+    a_2 = diag_elems**2
+    b_2 = torch.cat([torch.zeros(batch, 1, device=device), off_diag_elems**2], dim=1)
+    ab = diag_elems[:, :-1] * off_diag_elems
+    # adding 1 here for numerical stability. allows model to only learn off diagonal elements
+    prec += torch.diag_embed(a_2+b_2, dim1=-2, dim2=-1)
+    off_diagonal = torch.diag_embed(ab, offset=1, dim1=-2, dim2=-1)            
+    prec += off_diagonal + off_diagonal.transpose(-2, -1) + eps * torch.eye(time, device=device).unsqueeze(0)
+    # print(prec[0])
+    # """
+    if USING_TORCH_DIST:
+        return torch.distributions.MultivariateNormal(mean, precision_matrix=prec)
+    else:
+        cov = torch.linalg.inv(prec)
+        cholesky_cov = torch.linalg.cholesky(cov)        
+        return CustomDistribution(mean, cholesky_cov, cov=cov)
+    
+
 class CustomDistribution():
-    def __init__(self, mean, A):
+    def __init__(self, mean, A, cov=None):
         assert len(mean.shape) == 2, "Mean should be of shape (batch_seq, dim)"
         self.mean = mean
         self.A = A
+        self.cov = cov
     def get_covariance_matrix(self):
-        return torch.bmm(self.A, self.A.transpose(1, 2))
+        if self.cov is None:
+            self.cov = torch.bmm(self.A, self.A.transpose(1, 2))
+        return self.cov
     def sample(self):
         batch_seq, dim = self.mean.shape
         eps = torch.randn(batch_seq, dim, 1, device=self.mean.device)
@@ -38,9 +105,24 @@ class CustomDistribution():
         z = torch.bmm(self.A, eps).squeeze(2)        
         return z + self.mean
     def kl_divergence_normal(self):
-        cov = self.get_covariance_matrix()
-        det = torch.det(cov)
-        return 0.5 * torch.sum(torch.sum(self.mean.pow(2), dim=1) + torch.einsum("...ii", cov) - self.mean.shape[1] - torch.log(det+(eps**2)))
+        cov = self.get_covariance_matrix()        
+        det = torch.linalg.det(cov)
+        return 0.5 * torch.sum(torch.sum(self.mean.pow(2), dim=1) + torch.einsum("...ii", cov) - self.mean.shape[1] - torch.log(det+eps))
+    def kl_divergence_any(self, p_mean, p_cov, p_inv, p_log_det):        
+        # insert batch dimension for p_cov if not present        
+        if len(p_cov.shape) == 2:
+            # repeat p
+            p_cov = p_cov.unsqueeze(0).repeat(self.mean.shape[0], 1, 1)
+            p_inv = p_inv.unsqueeze(0).repeat(self.mean.shape[0], 1, 1)
+            p_log_det = p_log_det.unsqueeze(0).repeat(self.mean.shape[0])
+        q_cov = self.get_covariance_matrix()
+        q_log_det = torch.logdet(q_cov)
+        log_det_term = p_log_det - q_log_det
+        # print(p_cov.shape, q_cov.shape, p_inv.shape)
+        trace_term = torch.einsum("...ii", torch.bmm(p_inv, q_cov))
+        mu_term = torch.sum(torch.sum((self.mean - p_mean).unsqueeze(-1) * torch.bmm(p_inv, (self.mean - p_mean).unsqueeze(-1)), dim=(1, 2)))
+        return 0.5 * torch.sum(log_det_term - self.mean.shape[1] + trace_term + mu_term)
+        
    
 
 class TimeSeriesCombined(nn.Module):
@@ -81,12 +163,15 @@ class TimeSeriesCombined(nn.Module):
         
         self.smoothing_sigma = model_config['smoothing_sigma']
         if self.smoothing_sigma:            
-            cov_prior = rbf_kernel(time_bins, self.smoothing_sigma)
+            self.cov_prior = rbf_kernel(time_bins, self.smoothing_sigma)
             try:
-                self.prior_cholesky = torch.linalg.cholesky(cov_prior)
+                self.prior_cholesky = torch.linalg.cholesky(self.cov_prior)
             except:
-                self.prior_cholesky = torch.linalg.cholesky(cov_prior + eps * torch.eye(time_bins))
+                self.prior_cholesky = torch.linalg.cholesky(self.cov_prior + eps * torch.eye(time_bins))
                 print('Cholesky for prior failed. Added epsilon to diagonal')        
+            self.prior_inv = torch.linalg.inv(self.cov_prior)
+            self.prior_log_det = torch.logdet(self.cov_prior)
+            # print(self.prior_inv, self.prior_log_det)
         else:
             self.prior_cholesky = torch.eye(time_bins)
         
@@ -115,7 +200,7 @@ class TimeSeriesCombined(nn.Module):
         mean_z, mean_x = mean_both[:, :, :self.dim_z], mean_both[:, :, self.dim_z:]        
         
         # construct z distribution
-        bd_z = self.post_z(encoded)
+        bd_z = self.post_z(encoded)        
         z_distribution = []
         batch, time, dim = mean_z.shape            
         if self.cov_type == 'full':
@@ -133,7 +218,7 @@ class TimeSeriesCombined(nn.Module):
                 # diag_elems = nn.Softplus()(bd[:, :, i])
                 diag_elems = bd_z[:, :, i]
                 off_diag_elems = bd_z[:, :-1, i+dim]
-                # bd contains diagonal and off-diagonal elements. put them in a block diagonal matrix
+                # bd contains diagonal and off-diagonal elements. put them in a block diagonal matrix                
                 distribution = block_diag_precision(diag_elems, off_diag_elems, mean_z[:, :, i])
                 z_distribution.append(distribution)                
         elif self.cov_type == 'diagonal':
@@ -141,7 +226,7 @@ class TimeSeriesCombined(nn.Module):
             for i in range(dim):                    
                 diag_elems = (bd_z[:, :, i])**2
                 # contruct a distribution with diagonal elements
-                # distribution = torch.distributions.MultivariateNormal(mean_z[:, :, i], scale_tril=torch.diag_embed(diag_elems))
+                # distribution = torch.distributions.MultivariateNormal(mean_z[:, :, i], scale_tril=torch.diag_embed(diag_elems))                
                 distribution = CustomDistribution(mean_z[:, :, i], torch.diag_embed(diag_elems))
                 z_distribution.append(distribution)
         else:
@@ -151,7 +236,7 @@ class TimeSeriesCombined(nn.Module):
         cov_x = self.cov_x(encoded)
         batch, time, dim = mean_x.shape
         mean_x_flat = mean_x.view(batch*time, dim)        
-        cov_x_flat = cov_x.view(batch*time, dim, dim)        
+        cov_x_flat = cov_x.view(batch*time, dim, dim)
         x_distribution = CustomDistribution(mean_x_flat, cov_x_flat)
 
         to_ret_dict = {'z_distributions': z_distribution, 'x_distribution': x_distribution}
@@ -201,6 +286,9 @@ class VAEGPCombined(nn.Module):
 
         if self.zx_encoder.smoothing_sigma:
             assert self.beta > 0, "Beta should be greater than 0 for smoothing sigma"
+            self.using_smoothing = True
+        else:
+            self.using_smoothing = False
 
         # name model        
         self.arch_name = 'vae_gp_{}_'.format(xz_list)
@@ -269,12 +357,18 @@ class VAEGPCombined(nn.Module):
 
         loss = recon_loss
         if self.beta:            
-            # kl divergence
+            # kl divergence            
             kl_x = x_distribution.kl_divergence_normal()
-            # kl_z = self.zx_encoder.kl_divergence_z(z_distributions)
-            kl_z = 0
-            for d in z_distributions:
-                kl_z += d.kl_divergence_normal()
+            if USING_TORCH_DIST:
+                kl_z = self.zx_encoder.kl_divergence_z(z_distributions)            
+            else:
+                kl_z = 0
+                for d in z_distributions:
+                    if self.using_smoothing:
+                        kl_z += d.kl_divergence_any(torch.zeros_like(d.mean), self.zx_encoder.cov_prior, self.zx_encoder.prior_inv, self.zx_encoder.prior_log_det)
+                    else:
+                        kl_z += d.kl_divergence_normal()                
+                     
             kl = kl_x + kl_z
             loss += self.beta * kl
 
@@ -305,9 +399,20 @@ class VAEGPCombined(nn.Module):
         return loss/(batch * num_samples)
     
     def extract_relevant(self, vae_output):
-        y_recon = vae_output['y_recon'].detach().numpy()
-        mean_x = None #torch.stack([x.mean for x in vae_output['x_distributions']], dim=-1).detach().numpy()
-        mean_z = torch.stack([x.mean for x in vae_output['z_distributions']], dim=-1).detach().numpy()        
-        cov_x = vae_output['x_distribution'].get_covariance_matrix().detach().numpy()
-        cov_z = None#torch.stack([x.covariance_matrix for x in vae_output['z_distributions']], dim=-1).detach().numpy()
+        if USING_TORCH_DIST:
+            y_recon = vae_output['y_recon'].detach().numpy()
+            mean_x = torch.stack([x.mean for x in vae_output['x_distributions']], dim=-1).detach().numpy()
+            mean_z = torch.stack([x.mean for x in vae_output['z_distributions']], dim=-1).detach().numpy()                    
+            cov_z = torch.stack([x.covariance_matrix for x in vae_output['z_distributions']], dim=-1).detach().numpy()
+            cov_x = vae_output['x_distribution'].get_covariance_matrix().detach().numpy()
+        else:
+            y_recon = vae_output['y_recon'].detach().numpy()
+            batch, time, _ = y_recon.shape
+            mean_x = vae_output['x_distribution'].mean.detach().numpy()
+            cov_x = vae_output['x_distribution'].get_covariance_matrix().detach().numpy().reshape(batch, time, self.x_dim, self.x_dim)
+            mean_z = torch.stack([x.mean for x in vae_output['z_distributions']], dim=-1).detach().numpy()
+            cov_z = torch.stack([x.get_covariance_matrix() for x in vae_output['z_distributions']], dim=-1).detach().numpy()
         return y_recon, mean_x, mean_z, cov_x, cov_z, vae_output['x_samples'].detach().numpy(), vae_output['z_samples'].detach().numpy()
+    
+
+    

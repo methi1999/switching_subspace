@@ -4,63 +4,11 @@ import math
 import os
 import matplotlib.pyplot as plt
 import numpy as np
+from vae_gp import rbf_kernel, block_diag_precision, get_linear
+
 
 eps = 1e-4
 
-def get_linear(inp, out, hidden, dropout):
-    if len(hidden) == 0:
-        return [nn.Linear(inp, out)]
-    layers = []
-    for i in range(len(hidden)):
-        if i == 0:
-            layers.append(nn.Linear(inp, hidden[i]))
-        else:
-            layers.append(nn.Linear(hidden[i-1], hidden[i]))
-        layers.append(nn.ReLU())        
-        layers.append(nn.Dropout(dropout))
-    layers.append(nn.Linear(hidden[-1], out))            
-    return layers
-
-
-
-def rbf_kernel(time, sigma):
-    # sigma is a scalar, time is number of bins
-    # return kernel of shape (time, time)
-    time_range = torch.arange(time).unsqueeze(0).float()
-    time_diff = time_range - time_range.t()
-    return torch.exp(-time_diff**2 / (2 * sigma**2))
-
-# def normal_likelihood(x, mu, cov_det, inv):
-#     # x, mu are of shape (batch, dim)
-#     # cov is of shape (batch, dim, dim)
-#     # return likelihood of shape (batch)
-#     dim = x.shape[-1]    
-#     # calculate exponent
-#     exponent = -0.5 * torch.sum((x - mu).unsqueeze(-1) * torch.bmm(inv, (x - mu).unsqueeze(-1)), dim=(1, 2))
-#     # calculate constant
-#     constant = 1 / ((2 * math.pi)**(dim/2) * torch.sqrt(cov_det))
-#     return constant * torch.exp(exponent)    
-
-
-def block_diag_precision(diag_elems, off_diag_elems, mean):
-    """
-    # fill elements
-    prec = torch.diag_embed(diag_elems) + torch.diag_embed(off_diag_elems, offset=1, dim1=-2, dim2=-1)
-    # take product of transpose
-    prec = torch.bmm(prec.transpose(1, 2), prec)# + eps * torch.eye(prec.shape[-1], device=prec.device)
-    """
-    # """
-    batch, time = diag_elems.shape
-    device = diag_elems.device
-    prec = torch.zeros(batch, time, time, device=device)
-    a_2 = diag_elems**2
-    b_2 = torch.cat([torch.zeros(batch, 1, device=device), off_diag_elems**2], dim=1)
-    ab = diag_elems[:, :-1] * off_diag_elems            
-    prec += torch.diag_embed(a_2+b_2+1, dim1=-2, dim2=-1)
-    off_diagonal = torch.diag_embed(ab, offset=1, dim1=-2, dim2=-1)            
-    prec += off_diagonal + off_diagonal.transpose(-2, -1) + eps * torch.eye(time, device=device).unsqueeze(0)
-    # """
-    return torch.distributions.MultivariateNormal(mean, precision_matrix=prec)
    
 
 class TimeSeries(nn.Module):

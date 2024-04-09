@@ -42,7 +42,7 @@ vae_baseline:
 
 vae_gp:
   
-  cov_type: 'diagonal' # full, banded or diagonal for z
+  cov_type: 'banded' # full, banded or diagonal for z
   
   rnn_encoder:
     bidirectional: True
@@ -54,7 +54,7 @@ vae_gp:
     hidden_dims: []
     dropout: 0
 
-  smoothing_sigma: 
+  smoothing_sigma: 1
   kl_beta: 1
   weight_decay: 0.01
 
