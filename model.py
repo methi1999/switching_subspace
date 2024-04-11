@@ -101,6 +101,7 @@ class Model(nn.Module):
         return loss, loss_l
     
     def optim_step(self, train_decoder):
+        # torch.nn.utils.clip_grad_norm_(self.vae.parameters(), 1)
         self.vae.optimizer.step()
         if self.behavior_decoder and train_decoder:            
             self.behavior_decoder.optimizer.step()

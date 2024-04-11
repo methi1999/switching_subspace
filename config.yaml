@@ -42,7 +42,7 @@ vae_baseline:
 
 vae_gp:
   
-  cov_type: 'banded' # full, banded or diagonal for z
+  cov_type: 'diagonal' # full, banded or diagonal for z
   
   rnn_encoder:
     bidirectional: True
@@ -54,17 +54,17 @@ vae_gp:
     hidden_dims: []
     dropout: 0
 
-  smoothing_sigma: 1
+  smoothing_sigma:
   kl_beta: 1
   weight_decay: 0.01
 
   lr: 0.01
 
   monotonic:
-    use: False    
-    nu_z: 5
+    use: True    
+    nu_z: 
     nu_g: 1
-    coeff: 100
+    coeff: 
 
 decoder:
   behavior_weight: 10
@@ -107,14 +107,14 @@ early_stop:
   delta: 1
   test_every_new: 2
 
-epochs: 1000
+epochs: 2000
 test_every: 20
 plot_every: 5
 
 batch_size: 192
 optim_size: 192
 
-num_samples_train: 50
+num_samples_train: 20
 num_samples_test: 20
 
 

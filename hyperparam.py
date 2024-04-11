@@ -146,22 +146,22 @@ def one_train(config, device):
         pickle.dump((best_test_loss, train_losses, test_losses), f)
     return best_test_loss
    
-def loop_fixed(self):
+def loop_fixed(self, idx):
+    print("Exp with idx = {}".format(idx))
     config = deepcopy(config_global)
     config['vae_gp']['rnn_encoder']['num_layers'] = 2
     config['vae_gp']['rnn_encoder']['hidden_size'] = 8
-    config['vae_gp']['lr'] = 0.02
-    config['vae_gp']['post_rnn_linear']['hidden_dims'] = [16]
+    config['vae_gp']['lr'] = 0.01
+    config['num_samples_train'] = 20
 
-    config['batch_size'] = 8
-    config['optim_size'] = 192
-    config['num_samples_train'] = 100
+    config['vae_gp']['post_rnn_linear']['hidden_dims'] = []    
+    
+    config['vae_gp']['monotonic']['nu_z'] = [1, 5, 10, 20][idx]
 
-    for kl_beta in [0, 0.0001, 0.01, 0.5]:
-        config['vae_gp']['kl_beta'] = kl_beta
-        for smoothing_sig in [None, 0.1, 0.5, 1, 3]:
-            config['vae_gp']['smoothing_sigma'] = smoothing_sig
-            one_train(config, device)        
+    for coeff in [1, 3, 5, 10]:
+        config['vae_gp']['monotonic']['coeff'] = coeff
+        print("Exp with nu_z = {}, coeff = {}".format(config['vae_gp']['monotonic']['nu_z'], config['vae_gp']['monotonic']['coeff']))
+        one_train(config, device)        
 
 # create optuna function
 def objective_(trial):
@@ -220,4 +220,8 @@ def exp():
 if __name__ == '__main__':
 #     one_train(config_global, device)
     # exp()
-    loop_fixed(config_global)
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--idx', type=int)
+    args = parser.parse_args()    
+    loop_fixed(config_global, args.idx)
