@@ -90,7 +90,11 @@ class Model(nn.Module):
         return vae_output, behavior
 
     def loss(self, epoch, spikes_batch, behavior_batch, vae_pred, behavior_pred):
-        # loss = torch.tensor(0.0)
+        # loss = torch.tensor(0.0)        
+        # if epoch < 100:
+        #     self.vae.beta = 0.0
+        # else:
+        #     self.vae.beta = 1.0
         loss = self.vae.loss(spikes_batch, vae_pred)
         loss_l = [loss.item()]
         if self.behavior_decoder:

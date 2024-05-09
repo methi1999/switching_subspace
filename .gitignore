@@ -1,3 +1,5 @@
 __pycache__
 results/
 .idea/
+anqi_ppt/
+*.pkl

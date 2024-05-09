@@ -30,6 +30,9 @@ class EarlyStopping:
 
     def __call__(self, score, model: Model, save_model, save_prefix):
 
+        # check if score is nan
+        if np.isnan(score):
+            return
         if self.best_score is None:
             self.best_score = score
             if save_model:

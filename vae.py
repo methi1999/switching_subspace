@@ -273,7 +273,7 @@ class VAE(nn.Module):
         batch, time, dim, dim = A.shape
         flat_A = A.reshape(batch*time, dim, dim)    
         cov = torch.bmm(flat_A, torch.transpose(flat_A, 1, 2)).detach().view(batch, time, dim, dim).numpy()
-        return y_recon, mean_x, mean_z, cov, cov, vae_output['x_samples'].detach().numpy(), vae_output['z_samples'].detach().numpy()
+        return y_recon, mean_x, mean_z, cov, cov, vae_output['x_samples'].detach().numpy(), vae_output['z_samples'].detach().numpy(), None, None
     
 
 class PositionalEncoding(nn.Module):

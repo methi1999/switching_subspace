@@ -1,5 +1,136 @@
 import torch
 import torch.nn as nn
+import math
+
+
+LOG2 = torch.log(torch.tensor(2))
+
+class CNNDecoderIndivdual(nn.Module):
+    def __init__(self, config, xz_list):
+        super().__init__()
+        self.stim_dim, self.choice_dim = xz_list[0], xz_list[1]        
+        self.choice_idx = 0
+        if self.stim_dim > 0:
+            self.choice_idx += 1
+        assert self.stim_dim + self.choice_dim > 0, "Either stimulus or choice must be set"
+
+        channels = config['decoder']['cnn']['channels']
+        kernel_size = config['decoder']['cnn']['kernel_size']
+        pad = (kernel_size - 1)//2
+        dropout = config['decoder']['cnn']['dropout']
+
+        def make_1d_conv(inp_dim):
+            # 1d conv
+            layers = []            
+            for i in range(len(channels)):
+                if i == 0:
+                    layers.append(nn.Conv1d(in_channels=inp_dim, out_channels=channels[i], kernel_size=kernel_size, padding=pad))
+                else:
+                    layers.append(nn.Conv1d(in_channels=channels[i-1], out_channels=channels[i], kernel_size=kernel_size, padding=pad))
+                # layers.append(nn.BatchNorm1d(channels[i]))
+                layers.append(nn.LeakyReLU())
+                if dropout > 0:
+                    layers.append(nn.Dropout(dropout))            
+            # linear layer
+            layers.append(nn.Conv1d(in_channels=channels[-1], out_channels=2, kernel_size=1))
+            return layers
+        
+        if self.stim_dim > 0:
+            self.stimulus_weight = config['decoder']['stimulus_weight']
+            self.conv_stim = nn.Sequential(*make_1d_conv(self.stim_dim))
+            print("Using stimulus decoder")
+        else:
+            self.conv_stim = None
+
+        if self.choice_dim > 0:
+            self.choice_weight = config['decoder']['choice_weight']
+            self.conv_choice = nn.Sequential(*make_1d_conv(self.choice_dim))
+            print("Using choice decoder")
+        else:
+            self.conv_choice = None
+        # cross terms
+        self.cross_terms = config['decoder']['cross_terms']                                
+        # name
+        self.arch_name = 'cnn_{}_{}'.format('-'.join([str(x) for x in channels]), kernel_size)
+        # optimizer
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=config['decoder']['cnn']['lr'], weight_decay=config['decoder']['cnn']['weight_decay'])
+        # self.scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=[60, 90, 120, 150, 180], gamma=0.5)
+        if config['decoder']['scheduler']['which'] == 'cosine':
+            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optimizer, T_0=config['decoder']['scheduler']['cosine_restart_after'])
+            print('Using cosine annealing for decoder')
+        elif config['decoder']['scheduler']['which'] == 'decay':
+            self.scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=config['decoder']['scheduler']['const_factor'])
+            print('Using decay annealing for decoder')
+        else:
+            print('Scheduler not implemented for decoder')
+            self.scheduler = None        
+
+    def forward(self, x, z):
+        # x is of shape (batch_size*num_samples, seq_len, input_dim)                
+        # z = z.detach()
+        # x = x * z
+        x = x.permute(0, 2, 1)
+        z = z.permute(0, 2, 1)
+        if self.conv_stim:
+            x_stim = x[:, :self.stim_dim, :]
+            x_stim = self.conv_stim(x_stim)
+            x_stim = x_stim * z[:, 0:1, :]
+            # x_stim = torch.max(x_stim, dim=2).values
+            x_stim = torch.mean(x_stim, dim=2)
+            if self.cross_terms:
+                x_choicepred = self.conv_stim(x[:, self.stim_dim:self.stim_dim+self.choice_dim, :])
+                x_choicepred = x_choicepred * z[:, self.choice_idx:self.choice_idx+1, :]
+                x_choicepred = torch.mean(x_choicepred, dim=2)
+        else:
+            # x_stim = torch.zeros(x.size(0), 1, device=x.device)        
+            x_stim = torch.zeros(x.size(0), 2, device=x.device)
+            if self.cross_terms:
+                x_choicepred = torch.zeros(x.size(0), 2, device=x.device)
+        
+        if self.conv_choice:
+            x_choice = x[:, self.stim_dim:self.stim_dim+self.choice_dim, :]
+            x_choice = self.conv_choice(x_choice)            
+            x_choice = x_choice * z[:, self.choice_idx:self.choice_idx+1, :]
+            # x_choice = torch.max(x_choice, dim=2).values            
+            x_choice = torch.mean(x_choice, dim=2)
+            if self.cross_terms:
+                x_stimpred = self.conv_choice(x[:, :self.stim_dim, :])
+                x_stimpred = x_stimpred * z[:, 0:1, :]
+                x_stimpred = torch.mean(x_stimpred, dim=2)                
+        else:
+            # x_choice = torch.zeros(x.size(0), 1, device=x.device)
+            x_choice = torch.zeros(x.size(0), 2, device=x.device)
+            if self.cross_terms:
+                x_stimpred = torch.zeros(x.size(0), 2, device=x.device)
+        if self.cross_terms:
+            return torch.cat([x_stim, x_choice, x_stimpred, x_choicepred], dim=1)
+        else:
+            return torch.cat([x_stim, x_choice], dim=1)        
+
+    def loss(self, predicted, ground_truth, reduction='mean'):
+        """
+        Binary cross entropy loss
+        predicted: (batch_size*num_samples, 4)
+        ground_truth: (batch_size, 2)
+        """
+        batch_size = ground_truth.size(0)
+        num_samples = predicted.size(0)//batch_size
+        # repeat ground truth        
+        ground_truth = torch.cat([ground_truth]*num_samples, dim=0)
+        # loss_fn = nn.BCEWithLogitsLoss(reduction=reduction)
+        loss_fn = nn.CrossEntropyLoss(reduction=reduction)
+        loss = 0        
+        if self.conv_stim:
+            # loss += loss_fn(predicted[:, 0], ground_truth[:, 0]) * self.stimulus_weight
+            loss += loss_fn(predicted[:, :2], ground_truth[:, 0]) * self.stimulus_weight
+            if self.cross_terms:
+                loss += self.stimulus_weight * ((LOG2 - loss_fn(predicted[:, 6:8], ground_truth[:, 1])) ** 2)
+        if self.conv_choice:
+            # loss += loss_fn(predicted[:, 1], ground_truth[:, 1]) * self.choice_weight
+            loss += loss_fn(predicted[:, 2:4], ground_truth[:, 1]) * self.choice_weight
+            if self.cross_terms:
+                loss += self.choice_weight * ((LOG2 - loss_fn(predicted[:, 4:6], ground_truth[:, 0]))**2)
+        return loss
 
 
 class RNNDecoderIndivdual(nn.Module):
@@ -76,112 +207,6 @@ class RNNDecoderIndivdual(nn.Module):
             loss += loss_fn(predicted[:, 1], ground_truth[:, 1]) * self.choice_weight        
         return loss
 
-
-class CNNDecoderIndivdual(nn.Module):
-    def __init__(self, config, xz_list):
-        super().__init__()
-        self.stim_dim, self.choice_dim = xz_list[0], xz_list[1]        
-        self.choice_idx = 0
-        if self.stim_dim > 0:
-            self.choice_idx += 1
-        assert self.stim_dim + self.choice_dim > 0, "Either stimulus or choice must be set"
-
-        channels = config['decoder']['cnn']['channels']
-        kernel_size = config['decoder']['cnn']['kernel_size']
-        pad = (kernel_size - 1)//2
-        dropout = config['decoder']['cnn']['dropout']
-
-        def make_1d_conv(inp_dim):
-            # 1d conv        
-            use_group = 2
-            layers = []
-            for i in range(len(channels)):
-                if i == 0:
-                    layers.append(nn.Conv1d(in_channels=inp_dim, out_channels=channels[i], kernel_size=kernel_size, padding=pad))
-                else:
-                    layers.append(nn.Conv1d(in_channels=channels[i-1], out_channels=channels[i], kernel_size=kernel_size, padding=pad, groups=use_group))
-                layers.append(nn.BatchNorm1d(channels[i]))
-                layers.append(nn.LeakyReLU())
-                if dropout > 0:
-                    layers.append(nn.Dropout(dropout))            
-            # linear layer
-            layers.append(nn.Conv1d(in_channels=channels[-1], out_channels=2, kernel_size=1, groups=use_group))
-            return layers
-        
-        if self.stim_dim > 0:
-            self.stimulus_weight = config['decoder']['stimulus_weight']
-            self.conv_stim = nn.Sequential(*make_1d_conv(self.stim_dim))
-            print("Using stimulus decoder")
-        else:
-            self.conv_stim = None
-
-        if self.choice_dim > 0:
-            self.choice_weight = config['decoder']['choice_weight']
-            self.conv_choice = nn.Sequential(*make_1d_conv(self.choice_dim))
-            print("Using choice decoder")
-        else:
-            self.conv_choice = None                                
-        # name
-        self.arch_name = 'cnn_{}_{}'.format('-'.join([str(x) for x in channels]), kernel_size)
-        # optimizer
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=config['decoder']['cnn']['lr'], weight_decay=config['decoder']['cnn']['weight_decay'])
-        # self.scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=[60, 90, 120, 150, 180], gamma=0.5)
-        if config['decoder']['scheduler']['which'] == 'cosine':
-            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optimizer, T_0=config['decoder']['scheduler']['cosine_restart_after'])
-            print('Using cosine annealing for decoder')
-        elif config['decoder']['scheduler']['which'] == 'decay':
-            self.scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=config['decoder']['scheduler']['const_factor'])
-            print('Using decay annealing for decoder')
-        else:
-            print('Scheduler not implemented for decoder')
-            self.scheduler = None
-
-    def forward(self, x, z):
-        # x is of shape (batch_size*num_samples, seq_len, input_dim)        
-        # x = x * z
-        x = x.permute(0, 2, 1)
-        z = z.permute(0, 2, 1)
-        if self.conv_stim:
-            x_stim = x[:, :self.stim_dim, :]
-            x_stim = self.conv_stim(x_stim)
-            x_stim = x_stim * z[:, 0:1, :]
-            # x_stim = torch.max(x_stim, dim=2).values            
-            x_stim = torch.mean(x_stim, dim=2)
-        else:
-            # x_stim = torch.zeros(x.size(0), 1, device=x.device)        
-            x_stim = torch.zeros(x.size(0), 2, device=x.device)        
-        if self.conv_choice:
-            x_choice = x[:, self.stim_dim:self.stim_dim+self.choice_dim, :]
-            x_choice = self.conv_choice(x_choice)            
-            x_choice = x_choice * z[:, self.choice_idx:self.choice_idx+1, :]
-            # x_choice = torch.max(x_choice, dim=2).values            
-            x_choice = torch.mean(x_choice, dim=2)
-        else:
-            # x_choice = torch.zeros(x.size(0), 1, device=x.device)
-            x_choice = torch.zeros(x.size(0), 2, device=x.device)
-                
-        return torch.cat([x_stim, x_choice], dim=1)        
-
-    def loss(self, predicted, ground_truth, reduction='mean'):
-        """
-        Binary cross entropy loss
-        predicted: (batch_size*num_samples, 4)
-        ground_truth: (batch_size, 2)
-        """
-        batch_size = ground_truth.size(0)
-        num_samples = predicted.size(0)//batch_size
-        # repeat ground truth        
-        ground_truth = torch.cat([ground_truth]*num_samples, dim=0)
-        # loss_fn = nn.BCEWithLogitsLoss(reduction=reduction)
-        loss_fn = nn.CrossEntropyLoss(reduction=reduction)
-        loss = 0        
-        if self.conv_stim:
-            # loss += loss_fn(predicted[:, 0], ground_truth[:, 0]) * self.stimulus_weight
-            loss += loss_fn(predicted[:, :2], ground_truth[:, 0]) * self.stimulus_weight
-        if self.conv_choice:
-            # loss += loss_fn(predicted[:, 1], ground_truth[:, 1]) * self.choice_weight
-            loss += loss_fn(predicted[:, 2:4], ground_truth[:, 1]) * self.choice_weight
-        return loss
 
 class LinearAccDecoder(nn.Module):
     def __init__(self, config, xz_list):
