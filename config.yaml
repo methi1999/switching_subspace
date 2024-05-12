@@ -15,8 +15,8 @@ shape_dataset:
   win_len: 0.1
 
 # mention x for stimulus, choice and rest
-# dim_x_z: [0, 0, 1, 1, 1]
-dim_x_z: [1, 1, 1]
+dim_x_z: [0, 0, 1, 1, 1]
+# dim_x_z: [1, 1, 1]
 # dim_x_z: [0, 0, 3]
 
 
@@ -44,7 +44,7 @@ vae_gp:
   
   cov_type: 'diagonal' # full, banded or diagonal for z
   apply_softplus: False
-  z_entropy: 1
+  z_entropy:
   
   rnn_encoder:
     bidirectional: True
@@ -56,7 +56,7 @@ vae_gp:
     hidden_dims: []
     dropout: 0
 
-  kl_beta: 2
+  kl_beta: 3
   
   smoothing_sigma: 3
   noise_sigma: 0.01
@@ -76,17 +76,17 @@ vae_gp:
 decoder:
   behavior_weight: 10
 
-  stimulus_weight: 2
+  stimulus_weight: 3
   choice_weight: 1
   
-  which: 'cnn_indi'
-  # which: ''
+  # which: 'cnn_indi'
+  which: ''
   train_decoder_after: 50
-  cross_terms: True
+  cross_terms: False
   
   cnn:
     # channels: [4, 4, 4, 4, 4, 4]
-    channels: [8] 
+    channels: [4] 
     kernel_size: 5
     dropout: 0.1
     lr: 0.01

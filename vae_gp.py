@@ -63,9 +63,11 @@ def derivative_time_series(x):
     # return x[:, 1:-1, :] - x[:, :-2, :]    
 
 
-def normal_cdf(x, nu):
-    return torch.clip(0.5 * (1 + torch.erf(x * nu)), min=EPS)
+def normal_cdf(x, nu, offset=0):
+    return torch.clip(0.5 * (1 + torch.erf(x * nu + offset)), min=EPS)
 
+def normal_pdf(x, l):
+    return torch.exp(-x**2/l)
 
 def get_linear(inp, out, hidden, dropout):
     if len(hidden) == 0:
@@ -257,8 +259,8 @@ class TimeSeriesCombined(nn.Module):
             self.prior_inv = torch.linalg.inv(self.cov_prior)            
             self.prior_log_det = torch.logdet(self.cov_prior)
             # self.prior_cov += EPS * torch.eye(time_bins)
-            plt.imshow(self.cov_prior)
-            plt.colorbar()
+            # plt.imshow(self.cov_prior)
+            # plt.colorbar()
             print('Log det:', self.prior_log_det, 'Inverse max: ', self.prior_inv.max(), 'Covariance max: ', self.cov_prior.max())
             self.name += '_noise_{}_rbfscale_{}'.format(model_config['noise_sigma'], model_config['rbf_scaling'])
         else:
@@ -503,15 +505,19 @@ class VAEGPCombined(nn.Module):
             # just cdf loss
             g_prime = derivative_time_series(g)
             f_prime = derivative_time_series(z_samples)
+            # print(f_prime)
             
             l1 = -coef * torch.log(normal_cdf(g_prime, nu_g))[:, :, mask].sum()
             # term 1
             t1 = normal_cdf(f_prime, nu_z) * normal_cdf(-g, nu_g)
             # term 2
-            t2 = normal_cdf(-f_prime, nu_z) * normal_cdf(g, nu_g)            
+            t2 = normal_cdf(-f_prime, nu_z) * normal_cdf(g, nu_g)
+            # t2 = normal_pdf(f_prime, l=0.1) * normal_cdf(g, nu_g)
+            # t2 = normal_cdf(-f_prime, nu=5, offset=0.75) * normal_cdf(g, nu_g)
             l2 = -coef * torch.log(t1 + t2)[:, :, mask].sum()
             # print(l1, l2, loss)
             loss += l1 + l2
+            # loss += -coef * torch.log(normal_cdf(f_prime, nu_z)[:, :, mask]).sum()
 
         return loss/(batch * num_samples)
     
@@ -525,7 +531,7 @@ class VAEGPCombined(nn.Module):
         else:
             y_recon = vae_output['y_recon'].detach().numpy()
             batch, time, _ = y_recon.shape
-            mean_x = vae_output['x_distribution'].mean.detach().numpy()
+            mean_x = vae_output['x_distribution'].mean.detach().numpy().reshape(batch, time, -1)
             cov_x = vae_output['x_distribution'].get_covariance_matrix().detach().numpy().reshape(batch, time, self.x_dim, self.x_dim)
             mean_z = torch.stack([x.mean for x in vae_output['z_distributions']], dim=-1).detach().numpy()
             cov_z = torch.stack([x.get_covariance_matrix() for x in vae_output['z_distributions']], dim=-1).detach().numpy()
