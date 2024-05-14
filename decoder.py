@@ -32,8 +32,8 @@ class CNNDecoderIndividual(nn.Module):
                 else:
                     layers.append(nn.Conv1d(in_channels=channels[i-1], out_channels=channels[i], kernel_size=kernel_size, padding=pad))
                 # layers.append(nn.BatchNorm1d(channels[i]))
-                # layers.append(nn.LeakyReLU())
-                layers.append(nn.Tanh())
+                layers.append(nn.LeakyReLU())
+                # layers.append(nn.Tanh())
                 if dropout > 0:
                     layers.append(nn.Dropout(dropout))            
             # linear layer
@@ -142,12 +142,14 @@ class CNNDecoderIndividual(nn.Module):
             # loss += loss_fn(predicted[:, 0], ground_truth[:, 0]) * self.stimulus_weight
             loss += loss_fn(predicted[:, :2], ground_truth[:, 0]) * self.stimulus_weight
             if self.cross_terms:
-                loss += self.stimulus_weight * (predicted[:, 6:8] ** 2).mean()
+                # loss += self.stimulus_weight * (predicted[:, 6:8] ** 2).mean() / 2
+                loss += 0.5 * self.stimulus_weight * (loss_fn(predicted[:, 6:8], ground_truth[:, 1]) - LOG2)**2
         if self.conv_choice:
             # loss += loss_fn(predicted[:, 1], ground_truth[:, 1]) * self.choice_weight
             loss += loss_fn(predicted[:, 2:4], ground_truth[:, 1]) * self.choice_weight
             if self.cross_terms:
-                loss += self.choice_weight * (predicted[:, 4:6]**2).mean()
+                # loss += self.choice_weight * (predicted[:, 4:6]**2).mean() / 2
+                loss += 0.5 * self.choice_weight * (loss_fn(predicted[:, 4:6], ground_truth[:, 0]) - LOG2)**2
         return loss
 
 

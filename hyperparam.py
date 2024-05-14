@@ -128,6 +128,8 @@ def train(config, model: Model, train_loader, val_loader, early_stop):
             
     
     to_consider = [np.sum(x[1]) for x in test_losses]
+    # keep only non nan values
+    to_consider = [x for x in to_consider if not np.isnan(x)]
     # to_consider = [x[1] for x in train_losses]
     
     # compute min test loss and return it    
