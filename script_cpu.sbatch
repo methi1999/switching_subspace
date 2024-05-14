@@ -2,8 +2,8 @@
 
 #SBATCH --account=gts-awu36                   # account to which job is charged, ex: GT-gburdell3
 #SBATCH -J vae               # name of job
-#SBATCH -N1 --ntasks-per-node=1
-#SBATCH --mem-per-cpu=4G                        # Memory per core 
+#SBATCH -N1 --ntasks-per-node=4
+#SBATCH --mem-per-cpu=8G                        # Memory per core 
 #SBATCH -q embers                     # job is submitted to inferno queue
 #SBATCH -oRes-%j.out
 #SBATCH --mail-type=NONE

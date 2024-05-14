@@ -27,10 +27,10 @@ behaviour_data, spikes = utils.load_dataset(config)
 num_trials, time_bins, emissions_dim = np.array(spikes).shape
 
 # %%
-stim_idx, choice_idx = 6, 3
+# stim_idx, choice_idx = 6, 3
 stim = [x[0, stim_idx] for x in behaviour_data]
 choice = [x[0, choice_idx] for x in behaviour_data]
-num_contacts = [np.sum(x[:, -9:-5], axis=1) for x in behaviour_data]
+num_contacts = [np.sum(x[:, 15:19], axis=1) for x in behaviour_data]
 # concat them
 behaviour_data = np.stack((stim, choice), axis=1)
 

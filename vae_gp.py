@@ -293,6 +293,8 @@ class TimeSeriesCombined(nn.Module):
         # mean is of shape (batch, time, latent_dim)
         mean_both = self.posterior_mean(encoded)
         mean_z, mean_x = mean_both[:, :, :self.dim_z], mean_both[:, :, self.dim_z:]        
+        # centre x around 0 across time
+        # mean_x = mean_x - mean_x.mean(dim=0, keepdim=True)
         
         # construct z distribution
         bd_z = self.post_z(encoded)
@@ -440,7 +442,7 @@ class VAEGPCombined(nn.Module):
 
         # if self.neuron_bias is not None:
         #     y_recon = y_recon + self.neuron_bias
-        y_recon = nn.Softplus()(y_recon)        
+        y_recon = nn.Softplus()(y_recon)
         
         # add keys to out_dict
         out_dict['y_recon'] = y_recon

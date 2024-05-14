@@ -12,6 +12,17 @@ import matplotlib.pyplot as plt
 logger = logging.getLogger(__name__)
 
 
+
+behave_columns = ['outcome_cat_correct', 'outcome_cat_error', 'outcome_cat_spoil',
+       'choice_cat_left', 'choice_cat_nogo', 'choice_cat_right',
+       'prev_choice_cat_left', 'prev_choice_cat_nogo', 'prev_choice_cat_right',
+       'rewarded_side_cat_left', 'rewarded_side_cat_right',
+       'servo_position_cat_close', 'servo_position_cat_far',
+       'servo_position_cat_medium', 'rt',
+       'c0_count', 'c1_count', 'c2_count', 'c3_count', 'c0_angle', 'c1_angle', 'c2_angle', 'c3_angle',
+       'time', 'amp']
+
+
 def extract_mean_covariance(dist):
     """
     Extract mean and covariance matrix from distribution object
@@ -69,8 +80,8 @@ def load_dataset(config):
     session = config['shape_dataset']['id']
     file_name = 'shape_processed_behave_spike_contact_{}_ms'.format(int(config['shape_dataset']['win_len']*1000))
     with open(os.path.join(base_path, session, file_name), 'rb') as f:
-        behaviour_data, spikes = pickle.load(f)    
-    return behaviour_data, spikes
+        behaviour_data, spikes, trial_id = pickle.load(f)    
+    return behaviour_data, spikes, trial_id
 
 def model_store_path(config, arch_name):    
     data_des = 'dandi_{}/{}_ms'.format(config['shape_dataset']['id'], int(config['shape_dataset']['win_len']*1000))

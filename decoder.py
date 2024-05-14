@@ -38,6 +38,7 @@ class CNNDecoderIndividual(nn.Module):
                     layers.append(nn.Dropout(dropout))            
             # linear layer
             layers.append(nn.Conv1d(in_channels=channels[-1], out_channels=2, kernel_size=1))
+            # layers.append(nn.Conv1d(in_channels=channels[-1], out_channels=1, kernel_size=1))
             return layers
         
         if self.stim_dim > 0:
@@ -68,7 +69,28 @@ class CNNDecoderIndividual(nn.Module):
             print('Using decay annealing for decoder')
         else:
             print('Scheduler not implemented for decoder')
-            self.scheduler = None        
+            self.scheduler = None
+    
+    def cnn_forward(self, x, z, z_dim, x_s_dim, x_e_dim, conv):
+        x = x[:, x_s_dim: x_e_dim+1, :]
+        z = z[:, z_dim: z_dim+1, :]
+        # original
+        x = conv(x)
+        x = x * z
+        # # keep only certain predictions
+        # # zero out all x values outside a window of 3 around the peak of z
+        # peak_z = torch.argmax(z, dim=2).squeeze(-1)                
+        # mask = torch.zeros_like(x[:, 0, :])                
+        # mask.scatter_(1, peak_z.unsqueeze(1), 1)
+        # mask.scatter_(1, torch.clip(peak_z-1, 0).unsqueeze(1), 1)
+        # mask.scatter_(1, torch.clip(peak_z+1, 0, z.shape[-1]-1).unsqueeze(1), 1)
+        # mask.scatter_(1, torch.clip(peak_z-2, 0).unsqueeze(1), 1)
+        # mask.scatter_(1, torch.clip(peak_z+2, 0, z.shape[-1]-1).unsqueeze(1), 1)
+        # mask = mask.unsqueeze(1)                
+        # x = x * mask        
+        # x = torch.mean(x, dim=2)
+        x = torch.max(x, dim=2).values
+        return x
 
     def forward(self, x, z):
         # x is of shape (batch_size*num_samples, seq_len, input_dim)                
@@ -77,20 +99,9 @@ class CNNDecoderIndividual(nn.Module):
         x = x.permute(0, 2, 1)
         z = z.permute(0, 2, 1)
         if self.conv_stim:
-            x_stim = x[:, :self.stim_dim, :]
-            x_stim = self.conv_stim(x_stim)
-            z_stim = z[:, 0:1, :]
-            # find argmax along time
-            z_stim_max = torch.argmax(z_stim, dim=2)
-            
-            x_stim = x_stim * z[:, 0:1, :]
-            x_stim = torch.mean(x_stim, dim=2)
-            # x_stim = torch.max(x_stim, dim=2).values
+            x_stim = self.cnn_forward(x, z, 0, 0, self.stim_dim-1, self.conv_stim)            
             if self.cross_terms:
-                x_choicepred = self.conv_stim(x[:, self.stim_dim:self.stim_dim+self.choice_dim, :])
-                x_choicepred = x_choicepred * z[:, self.choice_idx:self.choice_idx+1, :]
-                x_choicepred = torch.mean(x_choicepred, dim=2)
-                # x_choicepred = torch.max(x_choicepred, dim=2).values
+                x_choicepred = self.cnn_forward(x, z, self.choice_idx, self.stim_dim, self.stim_dim+self.choice_dim-1, self.conv_stim)
         else:
             # x_stim = torch.zeros(x.size(0), 1, device=x.device)        
             x_stim = torch.zeros(x.size(0), 2, device=x.device)
@@ -98,17 +109,9 @@ class CNNDecoderIndividual(nn.Module):
                 x_choicepred = torch.zeros(x.size(0), 2, device=x.device)
         
         if self.conv_choice:
-            x_choice = x[:, self.stim_dim:self.stim_dim+self.choice_dim, :]
-            x_choice = self.conv_choice(x_choice)            
-            x_choice = x_choice * z[:, self.choice_idx:self.choice_idx+1, :]
-            # print(x_choice.shape, z[:, self.choice_idx:self.choice_idx+1, :].shape)
-            x_choice = torch.mean(x_choice, dim=2)
-            # x_choice = torch.max(x_choice, dim=2).values            
+            x_choice = self.cnn_forward(x, z, self.choice_idx, self.stim_dim, self.stim_dim+self.choice_dim-1, self.conv_choice)
             if self.cross_terms:
-                x_stimpred = self.conv_choice(x[:, :self.stim_dim, :])
-                x_stimpred = x_stimpred * z[:, 0:1, :]
-                x_stimpred = torch.mean(x_stimpred, dim=2)                
-                # x_stimpred = torch.max(x_stimpred, dim=2).values
+                x_stimpred = self.cnn_forward(x, z, 0, 0, self.stim_dim-1, self.conv_choice)
         else:
             # x_choice = torch.zeros(x.size(0), 1, device=x.device)
             x_choice = torch.zeros(x.size(0), 2, device=x.device)
@@ -129,7 +132,10 @@ class CNNDecoderIndividual(nn.Module):
         num_samples = predicted.size(0)//batch_size
         # repeat ground truth        
         ground_truth = torch.cat([ground_truth]*num_samples, dim=0)                
+        # for bceloss
         # loss_fn = nn.BCEWithLogitsLoss(reduction=reduction)
+        # ground_truth = ground_truth.float()
+        # print(ground_truth.dtype, predicted.dtype)
         loss_fn = nn.CrossEntropyLoss(reduction=reduction)
         loss = 0        
         if self.conv_stim:
