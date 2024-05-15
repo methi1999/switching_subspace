@@ -78,12 +78,15 @@ class Model(nn.Module):
             os.makedirs(self.final_path)
     
     def forward(self, spikes, n_samples, use_mean_for_decoding=False):
-        vae_output = self.vae(spikes, n_samples)
-        x, z = vae_output['x_samples'], vae_output['z_samples']
+        vae_output = self.vae(spikes, n_samples)        
         if self.behavior_decoder:
             if use_mean_for_decoding:
-                behavior = self.behavior_decoder(mu[:, :, self.vae.z_dim:], mu[:, :, :self.vae.z_dim])
+                softmax = nn.Softmax(dim=-1)
+                mean_x, mean_z = vae_output['x_distribution'].mean, torch.stack([softmax(x.mean) for x in vae_output['z_distributions']], dim=-1)                
+                mean_x = mean_x.reshape(mean_z.shape[0], mean_z.shape[1], -1)
+                behavior = self.behavior_decoder(mean_x, mean_z)
             else:
+                x, z = vae_output['x_samples'], vae_output['z_samples']
                 behavior = self.behavior_decoder(x, z)
         else:
             behavior = None

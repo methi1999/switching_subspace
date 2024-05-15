@@ -32,8 +32,8 @@ class CNNDecoderIndividual(nn.Module):
                 else:
                     layers.append(nn.Conv1d(in_channels=channels[i-1], out_channels=channels[i], kernel_size=kernel_size, padding=pad))
                 # layers.append(nn.BatchNorm1d(channels[i]))
-                layers.append(nn.LeakyReLU())
-                # layers.append(nn.Tanh())
+                # layers.append(nn.LeakyReLU())
+                layers.append(nn.Tanh())
                 if dropout > 0:
                     layers.append(nn.Dropout(dropout))            
             # linear layer
@@ -56,6 +56,8 @@ class CNNDecoderIndividual(nn.Module):
             self.conv_choice = None
         # cross terms
         self.cross_terms = config['decoder']['cross_terms']                                
+        # normalize
+        self.normalize_trials = config['decoder']['cnn']['normalize_trial_time']
         # name
         self.arch_name = 'cnn_{}_{}'.format('-'.join([str(x) for x in channels]), kernel_size)
         # optimizer
@@ -73,29 +75,42 @@ class CNNDecoderIndividual(nn.Module):
     
     def cnn_forward(self, x, z, z_dim, x_s_dim, x_e_dim, conv):
         x = x[:, x_s_dim: x_e_dim+1, :]
-        z = z[:, z_dim: z_dim+1, :]
-        # original
+        z = z[:, z_dim: z_dim+1, :]        
         x = conv(x)
-        x = x * z
-        # # keep only certain predictions
-        # # zero out all x values outside a window of 3 around the peak of z
-        # peak_z = torch.argmax(z, dim=2).squeeze(-1)                
-        # mask = torch.zeros_like(x[:, 0, :])                
-        # mask.scatter_(1, peak_z.unsqueeze(1), 1)
-        # mask.scatter_(1, torch.clip(peak_z-1, 0).unsqueeze(1), 1)
-        # mask.scatter_(1, torch.clip(peak_z+1, 0, z.shape[-1]-1).unsqueeze(1), 1)
-        # mask.scatter_(1, torch.clip(peak_z-2, 0).unsqueeze(1), 1)
-        # mask.scatter_(1, torch.clip(peak_z+2, 0, z.shape[-1]-1).unsqueeze(1), 1)
-        # mask = mask.unsqueeze(1)                
-        # x = x * mask        
+        x = x * z        
         # x = torch.mean(x, dim=2)
         x = torch.max(x, dim=2).values
         return x
+    
+    # def cnn_forward(self, x, z, z_dim, x_s_dim, x_e_dim, conv):
+    #     x = x[:, x_s_dim: x_e_dim+1, :]
+    #     z = z[:, z_dim: z_dim+1, :]
+    #     # original
+    #     # keep only certain predictions
+    #     # zero out all x values outside a window of 3 around the peak of z
+    #     peak_z = torch.argmax(z, dim=2).squeeze(-1)                
+    #     mask = torch.zeros_like(x[:, 0, :])                
+    #     mask.scatter_(1, peak_z.unsqueeze(1), 1)
+    #     mask.scatter_(1, torch.clip(peak_z-1, 0).unsqueeze(1), 1)
+    #     mask.scatter_(1, torch.clip(peak_z+1, 0, z.shape[-1]-1).unsqueeze(1), 1)
+    #     mask.scatter_(1, torch.clip(peak_z-2, 0).unsqueeze(1), 1)
+    #     mask.scatter_(1, torch.clip(peak_z+2, 0, z.shape[-1]-1).unsqueeze(1), 1)
+    #     # mask.scatter_(1, torch.clip(peak_z-3, 0).unsqueeze(1), 1)
+    #     # mask.scatter_(1, torch.clip(peak_z+3, 0, z.shape[-1]-1).unsqueeze(1), 1)
+    #     mask = mask.unsqueeze(1)                
+    #     x = x * mask        
+    #     x = conv(x)        
+    #     # x = torch.mean(x, dim=2)
+    #     x = torch.max(x, dim=2).values
+    #     return x
 
     def forward(self, x, z):
         # x is of shape (batch_size*num_samples, seq_len, input_dim)                
         # z = z.detach()
         # x = x * z
+        if self.normalize_trials:
+            x = x - x.mean(dim=1, keepdim=True)
+            x = x / torch.abs(x).max(dim=1, keepdim=True).values
         x = x.permute(0, 2, 1)
         z = z.permute(0, 2, 1)
         if self.conv_stim:
@@ -142,14 +157,14 @@ class CNNDecoderIndividual(nn.Module):
             # loss += loss_fn(predicted[:, 0], ground_truth[:, 0]) * self.stimulus_weight
             loss += loss_fn(predicted[:, :2], ground_truth[:, 0]) * self.stimulus_weight
             if self.cross_terms:
-                # loss += self.stimulus_weight * (predicted[:, 6:8] ** 2).mean() / 2
-                loss += 0.5 * self.stimulus_weight * (loss_fn(predicted[:, 6:8], ground_truth[:, 1]) - LOG2)**2
+                loss += self.stimulus_weight * (predicted[:, 6:8] ** 2).mean() / 2
+                # loss += 0.25 * self.stimulus_weight * (loss_fn(predicted[:, 6:8], ground_truth[:, 1]) - LOG2)**2                
         if self.conv_choice:
             # loss += loss_fn(predicted[:, 1], ground_truth[:, 1]) * self.choice_weight
             loss += loss_fn(predicted[:, 2:4], ground_truth[:, 1]) * self.choice_weight
             if self.cross_terms:
-                # loss += self.choice_weight * (predicted[:, 4:6]**2).mean() / 2
-                loss += 0.5 * self.choice_weight * (loss_fn(predicted[:, 4:6], ground_truth[:, 0]) - LOG2)**2
+                loss += self.choice_weight * (predicted[:, 4:6]**2).mean() / 2
+                # loss += 0.25 * self.choice_weight * (loss_fn(predicted[:, 4:6], ground_truth[:, 0]) - LOG2)**2                
         return loss
 
 

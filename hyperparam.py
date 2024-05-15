@@ -173,7 +173,7 @@ def one_train(config, device):
     pth = utils.model_store_path(config, model.arch_name)
     with open(os.path.join(pth, 'losses.pkl'), 'wb') as f:
         pickle.dump((best_test_loss, train_losses, test_losses, bits_per_spike_train, bits_per_spike_test), f)
-    print("bits per spike train: {}, bits per spike test: {}".format(bits_per_spike_train, bits_per_spike_test))
+    print("bits per spike train: {}, bits per spike test: {}".format(np.sum(bits_per_spike_train), np.sum(bits_per_spike_test)))
     return best_test_loss
    
 def loop_fixed(self, idx):

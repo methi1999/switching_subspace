@@ -382,6 +382,7 @@ class VAEGPCombined(nn.Module):
         
         # reconstruction
         self.linear_maps = nn.ModuleList([nn.Linear(i, input_dim) for i in xz_list])                
+        # self.linear_maps = nn.ModuleList([nn.Sequential(nn.Linear(i, 8), nn.ReLU(), nn.Linear(8, input_dim)) for i in xz_list])                
 
         # beta for kl loss
         self.beta = model_config['kl_beta']
@@ -432,6 +433,10 @@ class VAEGPCombined(nn.Module):
         # z_samples = torch.stack([z_samples[:, :, 0], z_samples[:, :, 1], z0], dim=2)
         
         # map x to observation
+        # normalise each weight in linear map to norm 1
+        # for lin_map in self.linear_maps:
+        #     lin_map.weight.data = nn.functional.normalize(lin_map.weight, p=2, dim=1)        
+
         Cx_list = [self.linear_maps[i](x_samples[:, :, s: e]) for i, (s, e) in enumerate(self.xz_l)]
         # if any element is a tuple, take the first element
         # Cx_list = [self.linear2(Cx[0]) if isinstance(Cx, tuple) else Cx for Cx in Cx_list]
@@ -461,6 +466,7 @@ class VAEGPCombined(nn.Module):
         x_distribution = model_output['x_distribution']
         z_distributions = model_output['z_distributions']
         z_samples = model_output['z_samples']
+        z_mean = torch.stack([x.mean for x in z_distributions], dim=-1)
         
         batch, seq, _ = y.shape
         num_samples = y_recon.shape[0] // batch
@@ -498,15 +504,16 @@ class VAEGPCombined(nn.Module):
         # check for monotonicity constraint
         if 'g' in model_output:
             g = model_output['g']
-            g = torch.cat([g]*num_samples, dim=0)
             nu_g = self.zx_encoder.nu_g
             nu_z = self.zx_encoder.nu_z
             coef = self.zx_encoder.loss_coeff
             mask = self.zx_encoder.monotonic_mask
             # g is of shape (batch, time, latent_dim_z)
             # just cdf loss
-            g_prime = derivative_time_series(g)
+            g = torch.cat([g]*num_samples, dim=0)
+            g_prime = derivative_time_series(g)            
             f_prime = derivative_time_series(z_samples)
+            # f_prime = derivative_time_series(z_mean)
             # print(f_prime)
             
             l1 = -coef * torch.log(normal_cdf(g_prime, nu_g))[:, :, mask].sum()
@@ -520,6 +527,8 @@ class VAEGPCombined(nn.Module):
             # print(l1, l2, loss)
             loss += l1 + l2
             # loss += -coef * torch.log(normal_cdf(f_prime, nu_z)[:, :, mask]).sum()
+            # loss for ensuring g0 reaches 0 before g1
+            # loss += torch.clamp_max((g[:, :, 1] - g[:, :, 0]), max=0).sum()
 
         return loss/(batch * num_samples)
     
