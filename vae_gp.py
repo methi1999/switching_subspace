@@ -528,7 +528,14 @@ class VAEGPCombined(nn.Module):
             loss += l1 + l2
             # loss += -coef * torch.log(normal_cdf(f_prime, nu_z)[:, :, mask]).sum()
             # loss for ensuring g0 reaches 0 before g1
-            # loss += torch.clamp_max((g[:, :, 1] - g[:, :, 0]), max=0).sum()
+            # loss += 0.2 * torch.clamp((g[:, :, 1] - g[:, :, 0]), max=0).sum()
+            loss += coef * torch.clamp((torch.sign(g[:, :, 1]) - torch.sign(g[:, :, 0])), min=0).sum()                        
+            # ensures that g0 is ahead of g1 by at least 1 time step
+            # rolled_g0 = torch.roll(torch.sign(g[:, :, 0]), shifts=1, dims=1)
+            # rolled_g0[:, 0] = -1
+            # rolled_g0[:, 1] = -1
+            # loss += coef * torch.clamp((torch.sign(g[:, :, 1]) - rolled_g0), min=0).sum() / 5
+
 
         return loss/(batch * num_samples)
     

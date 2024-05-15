@@ -110,7 +110,7 @@ class CNNDecoderIndividual(nn.Module):
         # x = x * z
         if self.normalize_trials:
             x = x - x.mean(dim=1, keepdim=True)
-            x = x / torch.abs(x).max(dim=1, keepdim=True).values
+            # x = x / torch.abs(x).max(dim=1, keepdim=True).values
         x = x.permute(0, 2, 1)
         z = z.permute(0, 2, 1)
         if self.conv_stim:

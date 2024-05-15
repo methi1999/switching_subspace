@@ -15,8 +15,8 @@ shape_dataset:
   win_len: 0.1
 
 # mention x for stimulus, choice and rest
-# dim_x_z: [0, 0, 1, 1, 1]
-dim_x_z: [1, 1, 1]
+dim_x_z: [0, 0, 1, 1, 1]
+# dim_x_z: [1, 1, 1]
 # dim_x_z: [0, 0, 3]
 
 
@@ -71,17 +71,17 @@ vae_gp:
     use: True
     nu_z: 1
     nu_g: 1
-    coeff: 5
+    coeff: 15
     mask: [True, True, False]
 
 decoder:
   behavior_weight: 1
 
-  stimulus_weight: 20
-  choice_weight: 10
+  stimulus_weight: 10
+  choice_weight: 5
   
-  which: 'cnn_indi'
-  # which: ''
+  # which: 'cnn_indi'
+  which: ''
   train_decoder_after: 100
   cross_terms: False
   
@@ -90,7 +90,7 @@ decoder:
     channels: [8]
     kernel_size: 5
     dropout: 0.1
-    lr: 0.007
+    lr: 0.01
     weight_decay: 0
     normalize_trial_time: True
 
@@ -110,7 +110,7 @@ decoder:
     cosine_restart_after: 120
     const_factor: 0.99
 
-seed: 7
+seed: 100
 
 early_stop:
   patience: 300
