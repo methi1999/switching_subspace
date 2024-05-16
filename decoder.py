@@ -11,19 +11,22 @@ LOG2 = torch.log(torch.tensor(2))
 class CNNDecoderIndividual(nn.Module):
     def __init__(self, config, xz_list):
         super().__init__()
-        self.stim_dim, self.choice_dim = xz_list[0], xz_list[1]        
-        self.choice_idx = 0
-        if self.stim_dim > 0:
-            self.choice_idx += 1
-        assert self.stim_dim + self.choice_dim > 0, "Either stimulus or choice must be set"
+        self.stim_dim = config['decoder']['stimulus_latent']        
+        self.choice_dim = config['decoder']['choice_latent']
+        self.amp_dim = config['decoder']['amplitude_latent']
+        
+        # check atleast 1 is not None
+        assert self.stim_dim is not None or self.choice_dim is not None or self.amp_dim is not None, "Atleast one of stimulus, choice or amplitude should be set"
 
-        channels = config['decoder']['cnn']['channels']
-        kernel_size = config['decoder']['cnn']['kernel_size']
-        pad = (kernel_size - 1)//2
+        stimchoice_channels = config['decoder']['cnn']['channels']
+        stimchoice_kernel_size = config['decoder']['cnn']['kernel_size']
+        amp_channels = config['decoder']['cnn']['amp_channels']
+        amp_kernel_size = config['decoder']['cnn']['amp_kernel_size']        
         dropout = config['decoder']['cnn']['dropout']
-        self.one_sided_window = (kernel_size-1)//2
+        # self.one_sided_window = (kernel_size-1)//2
 
-        def make_1d_conv(inp_dim):
+        def make_1d_conv(inp_dim, out_dim, channels, kernel_size):
+            pad = (kernel_size - 1)//2
             # 1d conv
             layers = []            
             for i in range(len(channels)):
@@ -32,34 +35,56 @@ class CNNDecoderIndividual(nn.Module):
                 else:
                     layers.append(nn.Conv1d(in_channels=channels[i-1], out_channels=channels[i], kernel_size=kernel_size, padding=pad))
                 # layers.append(nn.BatchNorm1d(channels[i]))
-                # layers.append(nn.LeakyReLU())
-                layers.append(nn.Tanh())
+                layers.append(nn.LeakyReLU())
+                # layers.append(nn.Tanh())
                 if dropout > 0:
                     layers.append(nn.Dropout(dropout))            
             # linear layer
-            layers.append(nn.Conv1d(in_channels=channels[-1], out_channels=2, kernel_size=1))
+            layers.append(nn.Conv1d(in_channels=channels[-1], out_channels=out_dim, kernel_size=1))
             # layers.append(nn.Conv1d(in_channels=channels[-1], out_channels=1, kernel_size=1))
             return layers
         
-        if self.stim_dim > 0:
+        if self.stim_dim is not None:
             self.stimulus_weight = config['decoder']['stimulus_weight']
-            self.conv_stim = nn.Sequential(*make_1d_conv(self.stim_dim))
+            self.stim_start = 0
+            self.stim_xdim = xz_list[self.stim_dim]
+            self.conv_stim = nn.Sequential(*make_1d_conv(self.stim_xdim, 2, stimchoice_channels, stimchoice_kernel_size))
             print("Using stimulus decoder")
         else:
             self.conv_stim = None
 
-        if self.choice_dim > 0:
+        if self.choice_dim is not None:
             self.choice_weight = config['decoder']['choice_weight']
-            self.conv_choice = nn.Sequential(*make_1d_conv(self.choice_dim))
+            self.choice_start = 0 if self.stim_dim is None else self.stim_xdim
+            self.choice_xdim = xz_list[self.choice_dim]
+            self.conv_choice = nn.Sequential(*make_1d_conv(self.choice_xdim, 2, stimchoice_channels, stimchoice_kernel_size))
             print("Using choice decoder")
         else:
-            self.conv_choice = None
+            self.conv_choice = None            
+        
+        if self.amp_dim is not None:
+            self.amp_weight = config['decoder']['amplitude_weight']
+            self.amp_xdim = xz_list[self.amp_dim]
+            self.conv_amp = nn.Sequential(*make_1d_conv(self.amp_xdim, 1, amp_channels, amp_kernel_size))
+            if self.stim_dim and self.choice_dim:
+                self.amp_start = self.stim_xdim + self.choice_xdim
+            elif self.stim_dim:
+                self.amp_start = self.stim_xdim
+            elif self.choice_dim:
+                self.amp_start = self.choice_xdim
+            else:
+                self.amp_start = 0
+            print("Using amplitude decoder")
+        else:
+            self.conv_amp = None
+        
         # cross terms
         self.cross_terms = config['decoder']['cross_terms']                                
         # normalize
         self.normalize_trials = config['decoder']['cnn']['normalize_trial_time']
         # name
-        self.arch_name = 'cnn_{}_{}'.format('-'.join([str(x) for x in channels]), kernel_size)
+        # self.arch_name = 'cnn_{}_{}_{}_{}_{}'.format('-'.join([str(x) for x in channels]), kernel_size, self.stim_dim, self.choice_dim, self.amp_dim)
+        self.arch_name = 'cnn_{}_{}_{}'.format(self.stim_dim, self.choice_dim, self.amp_dim)
         # optimizer
         self.optimizer = torch.optim.Adam(self.parameters(), lr=config['decoder']['cnn']['lr'], weight_decay=config['decoder']['cnn']['weight_decay'])
         # self.scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=[60, 90, 120, 150, 180], gamma=0.5)
@@ -73,13 +98,22 @@ class CNNDecoderIndividual(nn.Module):
             print('Scheduler not implemented for decoder')
             self.scheduler = None
     
-    def cnn_forward(self, x, z, z_dim, x_s_dim, x_e_dim, conv):
-        x = x[:, x_s_dim: x_e_dim+1, :]
+    def cnn_forward_maxpool(self, x, z, z_dim, x_s_dim, x_dim_len, conv):
+        x = x[:, x_s_dim: x_s_dim+x_dim_len, :]
         z = z[:, z_dim: z_dim+1, :]        
         x = conv(x)
         x = x * z        
         # x = torch.mean(x, dim=2)
         x = torch.max(x, dim=2).values
+        return x
+
+    def cnn_forward(self, x, z, z_dim, x_s_dim, x_dim_len, conv):                       
+        x = x[:, x_s_dim: x_s_dim+x_dim_len, :]
+        z = z[:, z_dim: z_dim+1, :]        
+        x = conv(x)
+        x = x * z
+        # aply relu
+        x = torch.sigmoid(x)
         return x
     
     # def cnn_forward(self, x, z, z_dim, x_s_dim, x_e_dim, conv):
@@ -114,9 +148,9 @@ class CNNDecoderIndividual(nn.Module):
         x = x.permute(0, 2, 1)
         z = z.permute(0, 2, 1)
         if self.conv_stim:
-            x_stim = self.cnn_forward(x, z, 0, 0, self.stim_dim-1, self.conv_stim)            
+            x_stim = self.cnn_forward_maxpool(x, z, self.stim_dim, self.stim_start, self.stim_xdim, self.conv_stim)            
             if self.cross_terms:
-                x_choicepred = self.cnn_forward(x, z, self.choice_idx, self.stim_dim, self.stim_dim+self.choice_dim-1, self.conv_stim)
+                x_choicepred = self.cnn_forward_maxpool(x, z, self.choice_dim, self.choice_start, self.choice_xdim, self.conv_stim)
         else:
             # x_stim = torch.zeros(x.size(0), 1, device=x.device)        
             x_stim = torch.zeros(x.size(0), 2, device=x.device)
@@ -124,20 +158,26 @@ class CNNDecoderIndividual(nn.Module):
                 x_choicepred = torch.zeros(x.size(0), 2, device=x.device)
         
         if self.conv_choice:
-            x_choice = self.cnn_forward(x, z, self.choice_idx, self.stim_dim, self.stim_dim+self.choice_dim-1, self.conv_choice)
+            x_choice = self.cnn_forward_maxpool(x, z, self.choice_dim, self.choice_start, self.choice_xdim, self.conv_choice)
             if self.cross_terms:
-                x_stimpred = self.cnn_forward(x, z, 0, 0, self.stim_dim-1, self.conv_choice)
+                x_stimpred = self.cnn_forward_maxpool(x, z, self.stim_dim, self.stim_start, self.stim_xdim, self.conv_choice)
         else:
             # x_choice = torch.zeros(x.size(0), 1, device=x.device)
             x_choice = torch.zeros(x.size(0), 2, device=x.device)
             if self.cross_terms:
                 x_stimpred = torch.zeros(x.size(0), 2, device=x.device)
-        if self.cross_terms:
-            return torch.cat([x_stim, x_choice, x_stimpred, x_choicepred], dim=1)
+        
+        if self.conv_amp:
+            x_amp = self.cnn_forward(x, z, self.amp_dim, self.amp_start, self.amp_xdim, self.conv_amp).squeeze(1)
         else:
-            return torch.cat([x_stim, x_choice], dim=1)        
+            x_amp = torch.zeros(x.size(0), 1, device=x.device)
 
-    def loss(self, predicted, ground_truth, reduction='mean'):
+        if self.cross_terms:
+            return torch.cat([x_stim, x_choice, x_stimpred, x_choicepred], dim=1), x_amp
+        else:
+            return torch.cat([x_stim, x_choice], dim=1), x_amp
+
+    def loss(self, predicted, ground_truth, amp_pred, amp_batch, reduction='mean'):
         """
         Binary cross entropy loss
         predicted: (batch_size*num_samples, 4)
@@ -147,24 +187,33 @@ class CNNDecoderIndividual(nn.Module):
         num_samples = predicted.size(0)//batch_size
         # repeat ground truth        
         ground_truth = torch.cat([ground_truth]*num_samples, dim=0)                
+        amp_batch = torch.cat([amp_batch]*num_samples, dim=0)
         # for bceloss
         # loss_fn = nn.BCEWithLogitsLoss(reduction=reduction)
         # ground_truth = ground_truth.float()
         # print(ground_truth.dtype, predicted.dtype)
-        loss_fn = nn.CrossEntropyLoss(reduction=reduction)
-        loss = 0        
+        cel_loss = nn.CrossEntropyLoss(reduction=reduction)
+        # amp_loss = nn.MSELoss(reduction=reduction)
+        amp_loss = nn.BCELoss(reduction=reduction)
+        loss = 0 
+
         if self.conv_stim:
-            # loss += loss_fn(predicted[:, 0], ground_truth[:, 0]) * self.stimulus_weight
-            loss += loss_fn(predicted[:, :2], ground_truth[:, 0]) * self.stimulus_weight
+            # loss += cel_loss(predicted[:, 0], ground_truth[:, 0]) * self.stimulus_weight            
+            loss += cel_loss(predicted[:, :2], ground_truth[:, 0]) * self.stimulus_weight
             if self.cross_terms:
                 loss += self.stimulus_weight * (predicted[:, 6:8] ** 2).mean() / 2
-                # loss += 0.25 * self.stimulus_weight * (loss_fn(predicted[:, 6:8], ground_truth[:, 1]) - LOG2)**2                
+                # loss += 0.25 * self.stimulus_weight * (cel_loss(predicted[:, 6:8], ground_truth[:, 1]) - LOG2)**2                
+        
         if self.conv_choice:
-            # loss += loss_fn(predicted[:, 1], ground_truth[:, 1]) * self.choice_weight
-            loss += loss_fn(predicted[:, 2:4], ground_truth[:, 1]) * self.choice_weight
+            # loss += cel_loss(predicted[:, 1], ground_truth[:, 1]) * self.choice_weight
+            loss += cel_loss(predicted[:, 2:4], ground_truth[:, 1]) * self.choice_weight
             if self.cross_terms:
                 loss += self.choice_weight * (predicted[:, 4:6]**2).mean() / 2
-                # loss += 0.25 * self.choice_weight * (loss_fn(predicted[:, 4:6], ground_truth[:, 0]) - LOG2)**2                
+                # loss += 0.25 * self.choice_weight * (cel_loss(predicted[:, 4:6], ground_truth[:, 0]) - LOG2)**2                
+        
+        if self.conv_amp:                        
+            loss += amp_loss(amp_pred, amp_batch) * self.amp_weight
+
         return loss
 
 

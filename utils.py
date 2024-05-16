@@ -35,7 +35,7 @@ def extract_mean_covariance(dist):
         raise ValueError("Distribution type not supported")
 
 
-def plot_curve(model, config, train_losses, test_losses):
+def plot_loss_curve(model, config, train_losses, test_losses):
     # plot train and test loss
     train_epochs = [x[0] for x in train_losses]
     train_losses_only = np.array([x[1] for x in train_losses])
@@ -70,6 +70,7 @@ def read_config(path='config.yaml'):
             return config
         except yaml.YAMLError as exc:
             print(exc)
+            return {}
 
 def dump_config(config, folder_path):
     with open(os.path.join(folder_path, 'config.json'), 'w') as f:
@@ -80,7 +81,9 @@ def load_dataset(config):
     session = config['shape_dataset']['id']
     file_name = 'shape_processed_behave_spike_contact_{}_ms'.format(int(config['shape_dataset']['win_len']*1000))
     with open(os.path.join(base_path, session, file_name), 'rb') as f:
-        behaviour_data, spikes, trial_id = pickle.load(f)    
+        behaviour_data, spikes, trial_id = pickle.load(f)
+    if config['chosen_neurons']:
+        spikes = np.array(spikes)[:, :, config['chosen_neurons']]
     return behaviour_data, spikes, trial_id
 
 def model_store_path(config, arch_name):    

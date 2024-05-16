@@ -382,7 +382,9 @@ class VAEGPCombined(nn.Module):
         
         # reconstruction
         self.linear_maps = nn.ModuleList([nn.Linear(i, input_dim) for i in xz_list])                
-        # self.linear_maps = nn.ModuleList([nn.Sequential(nn.Linear(i, 8), nn.ReLU(), nn.Linear(8, input_dim)) for i in xz_list])                
+        # self.linear_maps = nn.ModuleList([nn.Linear(i, input_dim, bias=False) for i in xz_list])                
+        # self.linear_maps = nn.ModuleList([nn.Sequential(nn.Linear(i, 8), nn.Tanh(), nn.Linear(8, input_dim)) for i in xz_list])                
+        self.softmax_temp = model_config['softmax_temp']
 
         # beta for kl loss
         self.beta = model_config['kl_beta']
@@ -405,6 +407,7 @@ class VAEGPCombined(nn.Module):
         self.arch_name += '_{}'.format(self.zx_encoder.name)
         self.arch_name += '_{}'.format(self.beta)
         self.arch_name += '_entropy_{}'.format(self.z_entropy)
+        self.arch_name += '_seed_{}'.format(config['seed'])
                             
         # optimizer
         self.optimizer = torch.optim.Adam(self.parameters(), lr=config['vae_gp']['lr'], weight_decay=config['vae_gp']['weight_decay'])        
@@ -416,16 +419,16 @@ class VAEGPCombined(nn.Module):
         # y is of shape (batch_size, seq_len, input_dim)
         batch, seq, _ = y.shape         
         out_dict = self.zx_encoder(y)
-        z_distributions, x_distribution = out_dict['z_distributions'], out_dict['x_distribution']
+        z_distributions, x_distribution = out_dict['z_distributions'], out_dict['x_distribution']        
         # sample from distributions. shape is (batch*samples, seq, x/z)        
         # z_samples = torch.stack([d.sample((n_samples,)).view(n_samples*batch, seq) for d in z_distributions], dim=-1)        
         z_samples_pre = torch.stack([torch.cat([z_distribution.sample() for _ in range(n_samples)], dim=0) for z_distribution in z_distributions], dim=-1)
         # print(z_samples.shape)
         x_samples = torch.cat([x_distribution.sample().view(batch, seq, -1) for _ in range(n_samples)], dim=0)        
         # print(x_samples.shape, z_samples.shape)
+        z_samples = torch.nn.Softmax(dim=2)(z_samples_pre/self.softmax_temp)
 
-        z_samples = torch.nn.Softmax(dim=2)(z_samples_pre)
-
+        # x_samples = torch.cat([x_distribution.sample().view(batch, seq, -1) for _ in range(1)], dim=0)        
         # # construct z0 as 1-(z1+z2)/2
         # # sigmoid on z
         # z_samples = nn.Sigmoid()(z_samples)
@@ -529,7 +532,8 @@ class VAEGPCombined(nn.Module):
             # loss += -coef * torch.log(normal_cdf(f_prime, nu_z)[:, :, mask]).sum()
             # loss for ensuring g0 reaches 0 before g1
             # loss += 0.2 * torch.clamp((g[:, :, 1] - g[:, :, 0]), max=0).sum()
-            loss += coef * torch.clamp((torch.sign(g[:, :, 1]) - torch.sign(g[:, :, 0])), min=0).sum()                        
+            # loss += coef * torch.clamp((torch.sign(g[:, :, 1]) - torch.sign(g[:, :, 0])), min=0).sum()                        
+            # loss += coef * torch.clamp((torch.sigmoid(5*g[:, :, 1]) - torch.sigmoid(5*g[:, :, 0])), min=0).sum()                        
             # ensures that g0 is ahead of g1 by at least 1 time step
             # rolled_g0 = torch.roll(torch.sign(g[:, :, 0]), shifts=1, dims=1)
             # rolled_g0[:, 0] = -1

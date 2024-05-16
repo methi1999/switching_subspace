@@ -50,8 +50,7 @@ class Model(nn.Module):
         else:
             self.behavior_decoder = None
             self.behavior_weight = 0        
-            print("No behavior decoder")
-            assert sum(xz_list[:2]) == 0, "Behavior decoder not present but z dimensions are not zero"
+            print("No behavior decoder")            
 
         # prior over z
         self.z_prior = config['z_prior']['include']
@@ -77,31 +76,33 @@ class Model(nn.Module):
         if not os.path.exists(self.final_path):
             os.makedirs(self.final_path)
     
-    def forward(self, spikes, n_samples, use_mean_for_decoding=False):
+    def forward(self, spikes, n_samples, use_mean_for_decoding):
         vae_output = self.vae(spikes, n_samples)        
         if self.behavior_decoder:
             if use_mean_for_decoding:
                 softmax = nn.Softmax(dim=-1)
                 mean_x, mean_z = vae_output['x_distribution'].mean, torch.stack([softmax(x.mean) for x in vae_output['z_distributions']], dim=-1)                
                 mean_x = mean_x.reshape(mean_z.shape[0], mean_z.shape[1], -1)
-                behavior = self.behavior_decoder(mean_x, mean_z)
+                behavior, amp = self.behavior_decoder(mean_x, mean_z)
             else:
                 x, z = vae_output['x_samples'], vae_output['z_samples']
-                behavior = self.behavior_decoder(x, z)
+                behavior, amp = self.behavior_decoder(x, z)
         else:
             behavior = None
-        return vae_output, behavior
+            amp = None
+        return vae_output, behavior, amp
 
-    def loss(self, epoch, spikes_batch, behavior_batch, vae_pred, behavior_pred):
+    def loss(self, epoch, spikes_batch, behavior_batch, amp_batch, vae_pred, behavior_pred, amp_pred):
         # loss = torch.tensor(0.0)        
         # if epoch < 100:
         #     self.vae.beta = 0.0
         # else:
         #     self.vae.beta = 1.0
+        # self.vae.softmax_temp = max(1 - (1 - 0.4) * (epoch / 800), 0.4)
         loss = self.vae.loss(spikes_batch, vae_pred)
         loss_l = [loss.item()]
         if self.behavior_decoder:
-            behave_loss = self.behavior_weight * self.behavior_decoder.loss(behavior_pred, behavior_batch)            
+            behave_loss = self.behavior_weight * self.behavior_decoder.loss(behavior_pred, behavior_batch, amp_pred, amp_batch)            
             loss += behave_loss
             loss_l.append(behave_loss.item())
         

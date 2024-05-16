@@ -6,12 +6,14 @@ from copy import deepcopy
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.model_selection import train_test_split
 import pickle
+import matplotlib.pyplot as plt
+from sklearn.metrics import accuracy_score
 
 from model import Model
 from early_stopping import EarlyStopping
 import utils
 
-
+colors = ['red', 'blue', 'green', 'black', 'yellow', 'pink']
 only_look_at_decoder = False
 
 is_cuda = torch.cuda.is_available()
@@ -30,36 +32,41 @@ behaviour_data, spikes, trial_ids = utils.load_dataset(config_global)
 stim_idx, choice_idx, amp_idx = 9, 3, 24
 stim = [x[0, stim_idx] for x in behaviour_data]
 choice = [x[0, choice_idx] for x in behaviour_data]
-amp = [x[:, amp_idx] for x in behaviour_data]
+amp = torch.tensor([x[:, amp_idx] for x in behaviour_data], dtype=torch.float32)
+# normalize amp by max value
+amp = amp / amp.max()
 num_contacts = [np.sum(x[:, 15:19], axis=1) for x in behaviour_data]
-# concat them
 behaviour_data = np.stack((stim, choice), axis=1)
 # convert to torch tensors
 behaviour_data = torch.tensor(behaviour_data, dtype=torch.long)
 # behaviour_data = torch.tensor(behaviour_data, dtype=torch.float32)
 spikes = torch.tensor(spikes, dtype=torch.float32)
-# subset of neurons
-chosen = [2, 4, 6, 8, 11, 12, 14, 15, 16, 30, 33]
-spikes = spikes[:, :, chosen]
 num_trials, time_bins, emissions_dim = np.array(spikes).shape
 # create dataloader with random sampling for training and testing
 # split data into training and testing
 # behaviour_data_train, behaviour_data_test, spikes_train, spikes_test = train_test_split(behaviour_data, spikes, test_size=0.3, random_state=42)
-behaviour_data_train, behaviour_data_test, spikes_train, spikes_test = train_test_split(behaviour_data, spikes, test_size=0.2, random_state=7)
-
+behaviour_data_train, behaviour_data_test, spikes_train, spikes_test, amp_train, amp_test = train_test_split(behaviour_data, spikes, amp, test_size=0.2, random_state=7)
 # create dataloaders
-train_dataset = TensorDataset(behaviour_data_train, spikes_train)
-test_dataset = TensorDataset(behaviour_data_test, spikes_test)
+train_dataset = TensorDataset(behaviour_data_train, spikes_train, amp_train)
+test_dataset = TensorDataset(behaviour_data_test, spikes_test, amp_test)
 
+batch_size = config_global['batch_size']
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
 
-def test(model, test_loader, n_samples):
+# convert to numpy
+spikes_train_np = spikes_train.detach().numpy()
+spikes_test_np = spikes_test.detach().numpy()
+spikes_np = spikes.detach().numpy()
+
+def test(model, test_loader):
     model.eval()
     test_loss = 0
     with torch.no_grad():
-        for _, (behavior_batch, spikes_batch) in enumerate(test_loader):
-            vae_pred, behavior_pred = model(spikes_batch, n_samples=n_samples)
+        for _, (behavior_batch, spikes_batch, amp_batch) in enumerate(test_loader):
+            vae_pred, behavior_pred, amp_pred = model(spikes_batch, n_samples=20, use_mean_for_decoding=True)
             # calculate loss
-            loss, loss_l = model.loss(np.inf, spikes_batch, behavior_batch, vae_pred, behavior_pred)
+            loss, loss_l = model.loss(np.inf, spikes_batch, behavior_batch, amp_batch, vae_pred, behavior_pred, amp_pred)
             # l.append(loss_l[1])
             test_loss += np.array(loss_l)            
             # print(np.mean(l), np.std(l))
@@ -82,12 +89,12 @@ def train(config, model: Model, train_loader, val_loader, early_stop):
         model.train()
         model.optim_zero_grad()
         optim_counter = 0
-        for i, (behavior_batch, spikes_batch) in enumerate(train_loader):            
+        for i, (behavior_batch, spikes_batch, amp_batch) in enumerate(train_loader):            
             # behavior_batch = behavior_batch.long()
-            vae_pred, behavior_pred = model(spikes_batch, n_samples=num_samples_train)
+            vae_pred, behavior_pred, amp_pred = model(spikes_batch, n_samples=num_samples_train, use_mean_for_decoding=False)            
             optim_counter += len(behavior_batch)
-            # calculate loss
-            loss, loss_l = model.loss(epoch, spikes_batch, behavior_batch, vae_pred, behavior_pred)
+            # calculate loss            
+            loss, loss_l = model.loss(epoch, spikes_batch, behavior_batch, amp_batch, vae_pred, behavior_pred, amp_pred)
             epoch_loss += np.array(loss_l)            
             # backward pass            
             loss.backward()
@@ -111,12 +118,12 @@ def train(config, model: Model, train_loader, val_loader, early_stop):
         model.scheduler_step(step_decoder = epoch >= train_decoder_after)
         # test loss
         if (epoch+1) % test_every == 0:
-            test_loss = test(model, val_loader, n_samples=config['num_samples_test'])
+            test_loss = test(model, val_loader)
             sum_test_loss = np.sum(test_loss)
             # scheduler.step(sum_test_loss)
             test_losses.append((epoch, test_loss))
             early_stop(sum_test_loss, model, save_model=save_model, save_prefix='best')
-            model.save_model(save_prefix=str(epoch))
+            # model.save_model(save_prefix=str(epoch))
             print('Epoch [{}/{}], Train Loss: {}, Test Loss: {}, Best Loss: {}'.format(epoch+1, config['epochs'], train_losses[-1][1], test_losses[-1][1], early_stop.best_score))
             if early_stop.slow_down:
                 test_every = config['early_stop']['test_every_new']
@@ -126,14 +133,73 @@ def train(config, model: Model, train_loader, val_loader, early_stop):
                 print("Early stopping")
                 break
             
+    utils.plot_loss_curve(model, config, train_losses, test_losses)
+    with torch.no_grad():
+        model.eval()        
+        # run on only test
+        vae_output, _, amp_out_test = model.forward(spikes_test, n_samples=1, use_mean_for_decoding=True)  
+        y_recon_test, x_mu_test, z_mu_test, x_A_test, z_A_test, x_test, z_test, z_test_presoftmax, g_test = model.vae.extract_relevant(vae_output)
+        # run only on train
+        vae_output, _, amp_out_train = model.forward(spikes_train, n_samples=1, use_mean_for_decoding=True)
+        y_recon_train, x_mu_train, z_mu_train, x_A_train, z_A_train, x_train, z_train, z_train_presoftmax, g_train = model.vae.extract_relevant(vae_output)
+        # run on both
+        vae_output, _, amp_out_all = model.forward(spikes, n_samples=1, use_mean_for_decoding=True)
+        y_recon_all, x_mu_all, z_mu_all, x_A_all, z_A_all, x_all, z_all, z_presoftmax_all, g_all = model.vae.extract_relevant(vae_output)
+
+    # compute bits/spike
+    bits_per_spike_train = utils.bits_per_spike(y_recon_train, spikes_train_np).sum()
+    bits_per_spike_test = utils.bits_per_spike(y_recon_test, spikes_test_np).sum()
+    bits_per_spike = utils.bits_per_spike(y_recon_all, spikes_np).sum()
+
+    plt.figure()
+    z = z_all
+    # z = z_mu_all    
+    x = x_mu_all
+    z_std = np.std(z, axis=0)
+    z_avg = np.mean(z, axis=0)
+    # make x ticks of range 0.1 from -2 to 0.5
+    bin_len = config['shape_dataset']['win_len']
+    t = np.arange(-2, 0.5, bin_len)
+    for i in range(z.shape[2]):
+        plt.plot(t, z_avg[:, i], label='z{}'.format(i), color=colors[i])    
+        plt.fill_between(t, z_avg[:, i]-z_std[:, i], z_avg[:, i]+z_std[:, i], alpha=0.3, color=colors[i])
+    # plt.set_title('z')
+    plt.legend()
+    plt.savefig(os.path.join(utils.model_store_path(config, model.arch_name), 'z_avg.png'))
+
+    agg_pred_train, agg_pred_test = [], []
+    agg_y_train, agg_y_test = [], []
+    # convert to numpy
+    y_train = behaviour_data_train.numpy()
+    y_test = behaviour_data_test.numpy()
+    # accuracy of stimulus and choice
+    acc_stim_train, acc_stim_test = [], []
+    acc_choice_train, acc_choice_test = [], []
+
+    with torch.no_grad():
+        model.eval()
+        behavior_pred_train = model.forward(spikes_train, n_samples=1, use_mean_for_decoding=True)[1]
+        behavior_pred_test = model.forward(spikes_test, n_samples=1, use_mean_for_decoding=True)[1]
+        # behavior_pred_train = model.forward(spikes_train, n_samples=1, use_mean_for_decoding=False)[1]
+        # behavior_pred_test = model.forward(spikes_test, n_samples=1, use_mean_for_decoding=False)[1]
+        # convert to numpy
+        # pred_train = behavior_pred_train.numpy() > 0
+        # pred_test = behavior_pred_test.numpy() > 0        
+        pred_train_stim = torch.argmax(behavior_pred_train[:, :2], dim=1).numpy()
+        pred_test_stim = torch.argmax(behavior_pred_test[:, :2], dim=1).numpy()
+        pred_train_choice = torch.argmax(behavior_pred_train[:, 2:4], dim=1).numpy()
+        pred_test_choice = torch.argmax(behavior_pred_test[:, 2:4], dim=1).numpy()    
+        # compute accuracy        
+        accuracy_train_stim = accuracy_score(y_train[:, 0], pred_train_stim)
+        accuracy_test_stim = accuracy_score(y_test[:, 0], pred_test_stim)        
+        # do the same for choice
+        accuracy_train_choice = accuracy_score(y_train[:, 1], pred_train_choice)
+        accuracy_test_choice = accuracy_score(y_test[:, 1], pred_test_choice)
     
-    to_consider = [np.sum(x[1]) for x in test_losses]
-    # keep only non nan values
-    to_consider = [x for x in to_consider if not np.isnan(x)]
-    # to_consider = [x[1] for x in train_losses]
-    
-    # compute min test loss and return it    
-    return np.min(to_consider), train_losses, test_losses
+    # dump all results
+    pth = utils.model_store_path(config, model.arch_name)
+    with open(os.path.join(pth, 'all_results.pkl'), 'wb') as f:
+        to_dump = (train_losses, test_losses, bits_per_spike_train, bits_per_spike_test, accuracy_train_stim, accuracy_test_stim, accuracy_train_choice, accuracy_test_choice)
 
 
 def one_train(config, device):        
@@ -143,54 +209,21 @@ def one_train(config, device):
     early_stop = EarlyStopping(patience=config['early_stop']['patience'], delta=config['early_stop']['delta'], trace_func=print)
     # create dataloaders
     batch_size = config['batch_size']
+    utils.set_seeds(config['seed'])
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
-    # train
-    best_test_loss, train_losses, test_losses = train(config, model, train_loader, test_loader, early_stop)
-    # convert to numpy
-    spikes_train_np = spikes_train.detach().numpy()
-    spikes_test_np = spikes_test.detach().numpy()
-    spikes_np = spikes.detach().numpy()
-
-    with torch.no_grad():
-        model.eval()        
-        # run on only test
-        vae_output, _ = model.forward(spikes_test, n_samples=1)  
-        y_recon_test, x_mu_test, z_mu_test, x_A_test, z_A_test, x_test, z_test, z_test_presoftmax, g_test = model.vae.extract_relevant(vae_output)
-        # run only on train
-        vae_output, _ = model.forward(spikes_train, n_samples=1)
-        y_recon_train, x_mu_train, z_mu_train, x_A_train, z_A_train, x_train, z_train, z_train_presoftmax, g_train = model.vae.extract_relevant(vae_output)
-        # run on both
-        vae_output, _ = model.forward(spikes, n_samples=1)
-        y_recon_all, x_mu_all, z_mu_all, x_A_all, z_A_all, x_all, z_all, z_presoftmax_all, g_all = model.vae.extract_relevant(vae_output)
-
-    # compute bits/spike
-    bits_per_spike_train = utils.bits_per_spike(y_recon_train, spikes_train_np)
-    bits_per_spike_test = utils.bits_per_spike(y_recon_test, spikes_test_np)
-    bits_per_spike = utils.bits_per_spike(y_recon_all, spikes_np)
-    # utils.plot_curve(model, config, train_losses, test_losses)
-    # save losses
-    pth = utils.model_store_path(config, model.arch_name)
-    with open(os.path.join(pth, 'losses.pkl'), 'wb') as f:
-        pickle.dump((best_test_loss, train_losses, test_losses, bits_per_spike_train, bits_per_spike_test), f)
-    print("bits per spike train: {}, bits per spike test: {}".format(np.sum(bits_per_spike_train), np.sum(bits_per_spike_test)))
-    return best_test_loss
-   
-def loop_fixed(self, idx):
-    print("Exp with idx = {}".format(idx))
-    config = deepcopy(config_global)
-    config['vae_gp']['rnn_encoder']['num_layers'] = 2
-    config['vae_gp']['rnn_encoder']['hidden_size'] = 8
-    config['vae_gp']['lr'] = 0.01
-    config['num_samples_train'] = 20
-
-    config['vae_gp']['post_rnn_linear']['hidden_dims'] = []    
+    # train model
+    train(config, model, train_loader, test_loader, early_stop)
     
-    config['vae_gp']['monotonic']['nu_z'] = [1, 5, 10, 20][idx]
 
-    for coeff in [1, 3, 5, 10]:
-        config['vae_gp']['monotonic']['coeff'] = coeff
-        print("Exp with nu_z = {}, coeff = {}".format(config['vae_gp']['monotonic']['nu_z'], config['vae_gp']['monotonic']['coeff']))
+def loop_fixed(idx):
+    print("Exp with idx = {}".format(idx))
+    config = deepcopy(config_global)    
+    config['dir']['results'] = 'results/seed'
+
+    for seed in range(idx, idx+10):
+        config['seed'] = seed
+        print("Seed = {}".format(seed))
         one_train(config, device)        
 
 # create optuna function
@@ -225,10 +258,11 @@ def exp():
 
 
 if __name__ == '__main__':
-#     one_train(config_global, device)
-    exp()
-    # import argparse
-    # parser = argparse.ArgumentParser()
-    # parser.add_argument('--idx', type=int)
-    # args = parser.parse_args()    
-    # loop_fixed(config_global, args.idx)
+    # loop_fixed(0)
+    # one_train(config_global, device)
+    # exp()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--idx', type=int)
+    args = parser.parse_args()    
+    loop_fixed(args.idx)
