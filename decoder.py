@@ -99,10 +99,10 @@ class CNNDecoderIndividual(nn.Module):
             self.scheduler = None
     
     def cnn_forward_maxpool(self, x, z, z_dim, x_s_dim, x_dim_len, conv):
-        x = x[:, x_s_dim: x_s_dim+x_dim_len, :]
+        x = x[:, x_s_dim: x_s_dim+x_dim_len, :]        
         z = z[:, z_dim: z_dim+1, :]        
-        x = conv(x)
-        x = x * z        
+        x = conv(x)        
+        x = x * (z) 
         # x = torch.mean(x, dim=2)
         x = torch.max(x, dim=2).values
         return x
@@ -111,6 +111,7 @@ class CNNDecoderIndividual(nn.Module):
         x = x[:, x_s_dim: x_s_dim+x_dim_len, :]
         z = z[:, z_dim: z_dim+1, :]        
         x = conv(x)
+        # x = x * (z > 0.4)
         x = x * z
         # aply relu
         x = torch.sigmoid(x)

@@ -12,6 +12,36 @@ from sklearn.metrics import accuracy_score
 from model import Model
 from early_stopping import EarlyStopping
 import utils
+import matplotlib
+matplotlib.use('Agg')  # Use the 'Agg' backend for non-interactive plotting
+
+
+def plot_loss_curve(model, config, train_losses, test_losses):
+    # plot train and test loss
+    train_epochs = [x[0] for x in train_losses]
+    train_losses_only = np.array([x[1] for x in train_losses])
+    test_epochs = [x[0] for x in test_losses]
+    test_losses_only = np.array([x[1] for x in test_losses])
+    behave_weight = config['decoder']['behavior_weight']
+    # plot
+    fig, ax1 = plt.subplots()
+    ax2 = ax1.twinx()
+    ax1.plot(train_epochs, train_losses_only[:, 0], label='Train Reconstruction', color='blue', linestyle='--')
+    if train_losses_only.shape[1] > 1:
+        ax2.plot(train_epochs, train_losses_only[:, 1]/behave_weight, label='Train Decoding', color='red', linestyle='--')
+    ax1.plot(test_epochs, test_losses_only[:, 0], label='Test Reconstruction', color='blue')
+    if train_losses_only.shape[1] > 1:
+        ax2.plot(test_epochs, test_losses_only[:, 1]/behave_weight, label='Test Decoding', color='red')
+    ax1.set_xlabel('Epochs')
+    ax1.set_ylabel('Reconstruction Loss', color='blue')
+    ax2.set_ylabel('Decoding Loss', color='red')
+    plt.title('Train and Test Loss')
+    ax1.legend(loc='upper left')
+    ax2.legend(loc='upper right')
+    # ax2.set_yscale('log')
+    # plt.show()
+    plt.savefig(os.path.join(utils.model_store_path(config, model.arch_name), 'train_test_loss.png'))
+
 
 colors = ['red', 'blue', 'green', 'black', 'yellow', 'pink']
 only_look_at_decoder = False
@@ -133,7 +163,7 @@ def train(config, model: Model, train_loader, val_loader, early_stop):
                 print("Early stopping")
                 break
             
-    utils.plot_loss_curve(model, config, train_losses, test_losses)
+    plot_loss_curve(model, config, train_losses, test_losses)
     with torch.no_grad():
         model.eval()        
         # run on only test
@@ -167,39 +197,44 @@ def train(config, model: Model, train_loader, val_loader, early_stop):
     plt.legend()
     plt.savefig(os.path.join(utils.model_store_path(config, model.arch_name), 'z_avg.png'))
 
-    agg_pred_train, agg_pred_test = [], []
-    agg_y_train, agg_y_test = [], []
-    # convert to numpy
-    y_train = behaviour_data_train.numpy()
-    y_test = behaviour_data_test.numpy()
-    # accuracy of stimulus and choice
-    acc_stim_train, acc_stim_test = [], []
-    acc_choice_train, acc_choice_test = [], []
+    if len(config['decoder']['which']) > 0:
 
-    with torch.no_grad():
-        model.eval()
-        behavior_pred_train = model.forward(spikes_train, n_samples=1, use_mean_for_decoding=True)[1]
-        behavior_pred_test = model.forward(spikes_test, n_samples=1, use_mean_for_decoding=True)[1]
-        # behavior_pred_train = model.forward(spikes_train, n_samples=1, use_mean_for_decoding=False)[1]
-        # behavior_pred_test = model.forward(spikes_test, n_samples=1, use_mean_for_decoding=False)[1]
+        agg_pred_train, agg_pred_test = [], []
+        agg_y_train, agg_y_test = [], []
         # convert to numpy
-        # pred_train = behavior_pred_train.numpy() > 0
-        # pred_test = behavior_pred_test.numpy() > 0        
-        pred_train_stim = torch.argmax(behavior_pred_train[:, :2], dim=1).numpy()
-        pred_test_stim = torch.argmax(behavior_pred_test[:, :2], dim=1).numpy()
-        pred_train_choice = torch.argmax(behavior_pred_train[:, 2:4], dim=1).numpy()
-        pred_test_choice = torch.argmax(behavior_pred_test[:, 2:4], dim=1).numpy()    
-        # compute accuracy        
-        accuracy_train_stim = accuracy_score(y_train[:, 0], pred_train_stim)
-        accuracy_test_stim = accuracy_score(y_test[:, 0], pred_test_stim)        
-        # do the same for choice
-        accuracy_train_choice = accuracy_score(y_train[:, 1], pred_train_choice)
-        accuracy_test_choice = accuracy_score(y_test[:, 1], pred_test_choice)
+        y_train = behaviour_data_train.numpy()
+        y_test = behaviour_data_test.numpy()
+        # accuracy of stimulus and choice
+        acc_stim_train, acc_stim_test = [], []
+        acc_choice_train, acc_choice_test = [], []
+
+        with torch.no_grad():
+            model.eval()
+            behavior_pred_train = model.forward(spikes_train, n_samples=1, use_mean_for_decoding=True)[1]
+            behavior_pred_test = model.forward(spikes_test, n_samples=1, use_mean_for_decoding=True)[1]
+            # behavior_pred_train = model.forward(spikes_train, n_samples=1, use_mean_for_decoding=False)[1]
+            # behavior_pred_test = model.forward(spikes_test, n_samples=1, use_mean_for_decoding=False)[1]
+            # convert to numpy
+            # pred_train = behavior_pred_train.numpy() > 0
+            # pred_test = behavior_pred_test.numpy() > 0        
+            pred_train_stim = torch.argmax(behavior_pred_train[:, :2], dim=1).numpy()
+            pred_test_stim = torch.argmax(behavior_pred_test[:, :2], dim=1).numpy()
+            pred_train_choice = torch.argmax(behavior_pred_train[:, 2:4], dim=1).numpy()
+            pred_test_choice = torch.argmax(behavior_pred_test[:, 2:4], dim=1).numpy()    
+            # compute accuracy        
+            accuracy_train_stim = accuracy_score(y_train[:, 0], pred_train_stim)
+            accuracy_test_stim = accuracy_score(y_test[:, 0], pred_test_stim)        
+            # do the same for choice
+            accuracy_train_choice = accuracy_score(y_train[:, 1], pred_train_choice)
+            accuracy_test_choice = accuracy_score(y_test[:, 1], pred_test_choice)
+    else:
+        accuracy_train_stim, accuracy_test_stim, accuracy_train_choice, accuracy_test_choice = 0, 0, 0, 0
     
     # dump all results
     pth = utils.model_store_path(config, model.arch_name)
     with open(os.path.join(pth, 'all_results.pkl'), 'wb') as f:
         to_dump = (train_losses, test_losses, bits_per_spike_train, bits_per_spike_test, accuracy_train_stim, accuracy_test_stim, accuracy_train_choice, accuracy_test_choice)
+        pickle.dump(to_dump, f)
 
 
 def one_train(config, device):        
@@ -219,7 +254,10 @@ def one_train(config, device):
 def loop_fixed(idx):
     print("Exp with idx = {}".format(idx))
     config = deepcopy(config_global)    
-    config['dir']['results'] = 'results/seed'
+    # config['dir']['results'] = 'results/seed_pt'
+    # config['dir']['results'] = 'results/seed_peakearly'
+    # config['dir']['results'] = 'results/seed_dynamicpt_cnn'
+    config['dir']['results'] = 'results/seed_dynamicpt_nocnn'
 
     for seed in range(idx, idx+10):
         config['seed'] = seed

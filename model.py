@@ -80,8 +80,9 @@ class Model(nn.Module):
         vae_output = self.vae(spikes, n_samples)        
         if self.behavior_decoder:
             if use_mean_for_decoding:
+                mean_x, mean_z = vae_output['x_distribution'].mean, torch.stack([x.mean for x in vae_output['z_distributions']], dim=-1)                
                 softmax = nn.Softmax(dim=-1)
-                mean_x, mean_z = vae_output['x_distribution'].mean, torch.stack([softmax(x.mean) for x in vae_output['z_distributions']], dim=-1)                
+                mean_z = softmax(mean_z)
                 mean_x = mean_x.reshape(mean_z.shape[0], mean_z.shape[1], -1)
                 behavior, amp = self.behavior_decoder(mean_x, mean_z)
             else:

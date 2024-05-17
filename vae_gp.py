@@ -286,6 +286,12 @@ class TimeSeriesCombined(nn.Module):
         print('Number of trainable parameters in Block Diagonal Z:', sum(p.numel() for p in self.post_z.parameters()))
         print('Number of trainable parameters in Cov X:', sum(p.numel() for p in self.cov_x.parameters()))
 
+        if model_config['load_pt']:
+            print('Loading weights')
+            weights = torch.load(model_config['load_pt'])
+            self.load_state_dict(weights)
+            print('Weights loaded')
+
     
     def forward(self, y):
         encoded, _ = self.rnn(y)
@@ -533,12 +539,13 @@ class VAEGPCombined(nn.Module):
             # loss for ensuring g0 reaches 0 before g1
             # loss += 0.2 * torch.clamp((g[:, :, 1] - g[:, :, 0]), max=0).sum()
             # loss += coef * torch.clamp((torch.sign(g[:, :, 1]) - torch.sign(g[:, :, 0])), min=0).sum()                        
-            # loss += coef * torch.clamp((torch.sigmoid(5*g[:, :, 1]) - torch.sigmoid(5*g[:, :, 0])), min=0).sum()                        
+            # loss += coef * torch.clamp((torch.sigmoid(5*g[:, :, 1]) - torch.sigmoid(5*g[:, :, 0])), min=0).sum()
             # ensures that g0 is ahead of g1 by at least 1 time step
             # rolled_g0 = torch.roll(torch.sign(g[:, :, 0]), shifts=1, dims=1)
             # rolled_g0[:, 0] = -1
             # rolled_g0[:, 1] = -1
             # loss += coef * torch.clamp((torch.sign(g[:, :, 1]) - rolled_g0), min=0).sum() / 5
+            # loss += coef * torch.clamp((torch.sigmoid(5*g[:, :, 1]) - torch.sigmoid(5*g[:, :, 0])), min=0).sum()
 
 
         return loss/(batch * num_samples)

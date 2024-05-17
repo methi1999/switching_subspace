@@ -15,8 +15,8 @@ shape_dataset:
   win_len: 0.1
 
 # mention x for stimulus, choice and rest
-# dim_x_z: [1, 1, 1]
-dim_x_z: [2, 2, 2]
+dim_x_z: [1, 1, 1]
+# dim_x_z: [2, 2, 2]
 # dim_x_z: [0, 0, 3]
 chosen_neurons: [2, 4, 6, 8, 9, 11, 12, 14, 15, 16, 25, 27, 30, 33]
 
@@ -45,13 +45,15 @@ vae_gp:
   cov_type: 'diagonal' # full, banded or diagonal for z
   apply_softplus: False
   z_entropy:
-  softmax_temp: 1
+  softmax_temp: 1  
+  # load_pt: vae_gp_2_8_weights_[2, 2, 2]_dynamic.pth
+  load_pt: vae_gp_2_8_weights_[1, 1, 1]_dynamic.pth
   
   rnn_encoder:
     bidirectional: True
     hidden_size: 8
     num_layers: 2
-    dropout: 0.1
+    dropout: 0.2
   
   post_rnn_linear:
     hidden_dims: [8]
@@ -87,7 +89,7 @@ decoder:
   
   which: 'cnn_indi'
   # which: ''
-  train_decoder_after: 100
+  train_decoder_after: 0
   cross_terms: False
   
   cnn:
