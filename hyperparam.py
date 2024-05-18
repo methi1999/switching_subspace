@@ -110,7 +110,7 @@ def train(config, model: Model, train_loader, val_loader, early_stop):
     train_decoder_after = config['decoder']['train_decoder_after']    
     num_samples_train = config['num_samples_train']
     optim_size = config['optim_size']
-    save_model = False    
+    save_model = True    
     for epoch in range(config['epochs']):
         # forward pass
         # print(model.behavior_decoder.scheduler.get_last_lr())
@@ -153,7 +153,7 @@ def train(config, model: Model, train_loader, val_loader, early_stop):
             # scheduler.step(sum_test_loss)
             test_losses.append((epoch, test_loss))
             early_stop(sum_test_loss, model, save_model=save_model, save_prefix='best')
-            # model.save_model(save_prefix=str(epoch))
+            model.save_model(save_prefix=str(epoch))
             print('Epoch [{}/{}], Train Loss: {}, Test Loss: {}, Best Loss: {}'.format(epoch+1, config['epochs'], train_losses[-1][1], test_losses[-1][1], early_stop.best_score))
             if early_stop.slow_down:
                 test_every = config['early_stop']['test_every_new']
@@ -163,6 +163,7 @@ def train(config, model: Model, train_loader, val_loader, early_stop):
                 print("Early stopping")
                 break
             
+    model.load_model('best')
     plot_loss_curve(model, config, train_losses, test_losses)
     with torch.no_grad():
         model.eval()        
@@ -257,7 +258,8 @@ def loop_fixed(idx):
     # config['dir']['results'] = 'results/seed_pt'
     # config['dir']['results'] = 'results/seed_peakearly'
     # config['dir']['results'] = 'results/seed_dynamicpt_cnn'
-    config['dir']['results'] = 'results/seed_dynamicpt_nocnn'
+    # config['dir']['results'] = 'results/seed_dynamicpt_nocnn'
+    config['dir']['results'] = 'results/vae_gp_nounimodality_cnn'
 
     for seed in range(idx, idx+10):
         config['seed'] = seed
@@ -281,18 +283,18 @@ def objective_(trial):
     return one_train(config, device)
 
 
-def exp():    
-    study_name = 'results/vaegp_tuning'  # Unique identifier of the study    
-    config_global['dir']['results'] = 'results/vaegp_tuning/'    
+# def exp():    
+#     study_name = 'results/vaegp_tuning'  # Unique identifier of the study    
+#     config_global['dir']['results'] = 'results/vaegp_tuning/'    
 
-    if not os.path.exists(study_name + '.db'):
-        study = optuna.create_study(study_name=study_name, storage='sqlite:///' + study_name + '.db', direction="minimize")
-    else:
-        study = optuna.load_study(study_name=study_name, storage='sqlite:///' + study_name + '.db')
+#     if not os.path.exists(study_name + '.db'):
+#         study = optuna.create_study(study_name=study_name, storage='sqlite:///' + study_name + '.db', direction="minimize")
+#     else:
+#         study = optuna.load_study(study_name=study_name, storage='sqlite:///' + study_name + '.db')
     
-    study.optimize(objective_, n_trials=100)
-    df = study.trials_dataframe()
-    df.to_csv(open(study_name + ".csv", 'w'), index=False, header=True)
+#     study.optimize(objective_, n_trials=100)
+#     df = study.trials_dataframe()
+#     df.to_csv(open(study_name + ".csv", 'w'), index=False, header=True)
 
 
 if __name__ == '__main__':
