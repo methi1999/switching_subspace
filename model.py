@@ -75,6 +75,13 @@ class Model(nn.Module):
         self.final_path = utils.model_store_path(self.config, self.arch_name)
         if not os.path.exists(self.final_path):
             os.makedirs(self.final_path)
+
+        if config['vae_gp']['load_stage2']:
+            print('Loading weights for s2')
+            weights = torch.load(config['vae_gp']['load_stage2'])
+            self.load_state_dict(weights, strict=False)
+            print('Weights loaded for s2')
+            assert config['vae_gp']['freeze_encoder_meanz'] is False, "Cannot freeze encoder after stage 2"
     
     def forward(self, spikes, n_samples, use_mean_for_decoding):
         vae_output = self.vae(spikes, n_samples)        

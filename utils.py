@@ -8,6 +8,7 @@ import json
 import yaml
 import pickle
 import matplotlib.pyplot as plt
+from sklearn.metrics import accuracy_score
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,23 @@ behave_columns = ['outcome_cat_correct', 'outcome_cat_error', 'outcome_cat_spoil
        'servo_position_cat_medium', 'rt',
        'c0_count', 'c1_count', 'c2_count', 'c3_count', 'c0_angle', 'c1_angle', 'c2_angle', 'c3_angle',
        'time', 'amp']
+
+
+
+def get_decoding_accuracies(model, behaviour_data, spikes):    
+
+    with torch.no_grad():
+        model.eval()
+        behavior_pred = model.forward(spikes, n_samples=1, use_mean_for_decoding=True)[1]                
+        pred_stim = torch.argmax(behavior_pred[:, :2], dim=1).numpy()        
+        pred_choice = torch.argmax(behavior_pred[:, 2:4], dim=1).numpy()
+        
+        # compute accuracy        
+        accuracy_stim = accuracy_score(behaviour_data[:, 0], pred_stim)        
+        # do the same for choice
+        accuracy_choice = accuracy_score(behaviour_data[:, 1], pred_choice)        
+    
+    return accuracy_stim, accuracy_choice
 
 
 def extract_mean_covariance(dist):

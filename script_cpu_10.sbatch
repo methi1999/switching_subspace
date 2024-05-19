@@ -7,7 +7,7 @@
 #SBATCH -q inferno                     # job is submitted to inferno queue
 #SBATCH -oRes-%j.out
 #SBATCH --mail-type=NONE
-#SBATCH --time 04:00:00
+#SBATCH --time 08:00:00
 
 echo "Started on `/bin/hostname`" 
 echo $pwd

@@ -232,7 +232,8 @@ class TimeSeriesCombined(nn.Module):
         dropout = model_config['post_rnn_linear']['dropout']        
 
         inp_dim = hidden_dim*2 if bidirectional else hidden_dim
-        self.posterior_mean = nn.Sequential(*get_linear(inp_dim, latent_dim_z+latent_dim_x, hidden_layers, dropout))
+        self.posterior_mean_z = nn.Sequential(*get_linear(inp_dim, latent_dim_z, hidden_layers, dropout))
+        self.posterior_mean_x = nn.Sequential(*get_linear(inp_dim, latent_dim_x, hidden_layers, dropout))
         
         self.cov_type = model_config['cov_type']
         if self.cov_type == 'full':
@@ -278,29 +279,34 @@ class TimeSeriesCombined(nn.Module):
             self.monotonic_mask = model_config['monotonic']['mask']
             assert len(self.monotonic_mask) == latent_dim_z, "Mask should have same length as latent_dim_z"
             assert sum(self.monotonic_mask) > 0, "at least one element should be 1 in mask"
-            self.name += '_monotonic_{}_{}_{}_{}'.format(self.nu_g, self.nu_z, model_config['monotonic']['coeff'], model_config['monotonic']['mask'])
-        
+            self.name += '_monotonic_{}_{}_{}_{}'.format(self.nu_g, self.nu_z, model_config['monotonic']['coeff'], model_config['monotonic']['mask'])            
+
+        if model_config['load_stage1']:
+            print('Loading weights for s1')
+            weights = torch.load(model_config['load_stage1'])
+            self.load_state_dict(weights)
+            print('Weights loaded for s1')            
+            if model_config['freeze_encoder_meanz']:
+                self.rnn.requires_grad_(False)
+                self.posterior_mean_z.requires_grad_(False)
+                print('Encoder and Posterior Mean Z frozen')        
+
+
+
         # for each module, print number of parameters
         print('Number of trainable parameters in RNN:', sum(p.numel() for p in self.rnn.parameters()))
-        print('Number of trainable parameters in Posterior Mean:', sum(p.numel() for p in self.posterior_mean.parameters()))
+        print('Number of trainable parameters in Posterior Mean X:', sum(p.numel() for p in self.posterior_mean_x.parameters()))
+        print('Number of trainable parameters in Posterior Mean Z:', sum(p.numel() for p in self.posterior_mean_z.parameters()))
         print('Number of trainable parameters in Block Diagonal Z:', sum(p.numel() for p in self.post_z.parameters()))
         print('Number of trainable parameters in Cov X:', sum(p.numel() for p in self.cov_x.parameters()))
-
-        if model_config['load_pt']:
-            print('Loading weights')
-            weights = torch.load(model_config['load_pt'])
-            self.load_state_dict(weights)
-            print('Weights loaded')
 
     
     def forward(self, y):
         encoded, _ = self.rnn(y)
         # encoded = self.rnn(y)
         # mean is of shape (batch, time, latent_dim)
-        mean_both = self.posterior_mean(encoded)
-        mean_z, mean_x = mean_both[:, :, :self.dim_z], mean_both[:, :, self.dim_z:]        
-        # centre x around 0 across time
-        # mean_x = mean_x - mean_x.mean(dim=0, keepdim=True)
+        mean_z = self.posterior_mean_z(encoded)
+        mean_x = self.posterior_mean_x(encoded)       
         
         # construct z distribution
         bd_z = self.post_z(encoded)
@@ -418,7 +424,7 @@ class VAEGPCombined(nn.Module):
         # optimizer
         self.optimizer = torch.optim.Adam(self.parameters(), lr=config['vae_gp']['lr'], weight_decay=config['vae_gp']['weight_decay'])        
 
-        self.scheduler = None
+        self.scheduler = None        
 
 
     def forward(self, y, n_samples):

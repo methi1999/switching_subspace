@@ -76,17 +76,23 @@ num_trials, time_bins, emissions_dim = np.array(spikes).shape
 # split data into training and testing
 # behaviour_data_train, behaviour_data_test, spikes_train, spikes_test = train_test_split(behaviour_data, spikes, test_size=0.3, random_state=42)
 behaviour_data_train, behaviour_data_test, spikes_train, spikes_test, amp_train, amp_test = train_test_split(behaviour_data, spikes, amp, test_size=0.2, random_state=7)
+# behaviour_data_train, behaviour_data_test, spikes_train, spikes_test, amp_train, amp_test = train_test_split(behaviour_data, spikes, amp, test_size=0.3, random_state=7)
+# further split test into test and val
+behaviour_data_test, behaviour_data_val, spikes_test, spikes_val, amp_test, amp_val = train_test_split(behaviour_data_test, spikes_test, amp_test, test_size=0.5, random_state=7)
 # create dataloaders
 train_dataset = TensorDataset(behaviour_data_train, spikes_train, amp_train)
 test_dataset = TensorDataset(behaviour_data_test, spikes_test, amp_test)
+val_dataset = TensorDataset(behaviour_data_val, spikes_val, amp_val)
 
 batch_size = config_global['batch_size']
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
 
 # convert to numpy
 spikes_train_np = spikes_train.detach().numpy()
 spikes_test_np = spikes_test.detach().numpy()
+spikes_val_np = spikes_val.detach().numpy()
 spikes_np = spikes.detach().numpy()
 
 def test(model, test_loader):
@@ -153,7 +159,7 @@ def train(config, model: Model, train_loader, val_loader, early_stop):
             # scheduler.step(sum_test_loss)
             test_losses.append((epoch, test_loss))
             early_stop(sum_test_loss, model, save_model=save_model, save_prefix='best')
-            model.save_model(save_prefix=str(epoch))
+            # model.save_model(save_prefix=str(epoch))
             print('Epoch [{}/{}], Train Loss: {}, Test Loss: {}, Best Loss: {}'.format(epoch+1, config['epochs'], train_losses[-1][1], test_losses[-1][1], early_stop.best_score))
             if early_stop.slow_down:
                 test_every = config['early_stop']['test_every_new']
@@ -173,6 +179,9 @@ def train(config, model: Model, train_loader, val_loader, early_stop):
         # run only on train
         vae_output, _, amp_out_train = model.forward(spikes_train, n_samples=1, use_mean_for_decoding=True)
         y_recon_train, x_mu_train, z_mu_train, x_A_train, z_A_train, x_train, z_train, z_train_presoftmax, g_train = model.vae.extract_relevant(vae_output)
+        # run only on val
+        vae_output, _, amp_out_val = model.forward(spikes_val, n_samples=1, use_mean_for_decoding=True)
+        y_recon_val, x_mu_val, z_mu_val, x_A_val, z_A_val, x_val, z_val, z_val_presoftmax, g_val = model.vae.extract_relevant(vae_output)
         # run on both
         vae_output, _, amp_out_all = model.forward(spikes, n_samples=1, use_mean_for_decoding=True)
         y_recon_all, x_mu_all, z_mu_all, x_A_all, z_A_all, x_all, z_all, z_presoftmax_all, g_all = model.vae.extract_relevant(vae_output)
@@ -180,7 +189,7 @@ def train(config, model: Model, train_loader, val_loader, early_stop):
     # compute bits/spike
     bits_per_spike_train = utils.bits_per_spike(y_recon_train, spikes_train_np).sum()
     bits_per_spike_test = utils.bits_per_spike(y_recon_test, spikes_test_np).sum()
-    bits_per_spike = utils.bits_per_spike(y_recon_all, spikes_np).sum()
+    bits_per_spike_val = utils.bits_per_spike(y_recon_val, spikes_val_np).sum()
 
     plt.figure()
     z = z_all
@@ -199,42 +208,14 @@ def train(config, model: Model, train_loader, val_loader, early_stop):
     plt.savefig(os.path.join(utils.model_store_path(config, model.arch_name), 'z_avg.png'))
 
     if len(config['decoder']['which']) > 0:
-
-        agg_pred_train, agg_pred_test = [], []
-        agg_y_train, agg_y_test = [], []
-        # convert to numpy
-        y_train = behaviour_data_train.numpy()
-        y_test = behaviour_data_test.numpy()
-        # accuracy of stimulus and choice
-        acc_stim_train, acc_stim_test = [], []
-        acc_choice_train, acc_choice_test = [], []
-
-        with torch.no_grad():
-            model.eval()
-            behavior_pred_train = model.forward(spikes_train, n_samples=1, use_mean_for_decoding=True)[1]
-            behavior_pred_test = model.forward(spikes_test, n_samples=1, use_mean_for_decoding=True)[1]
-            # behavior_pred_train = model.forward(spikes_train, n_samples=1, use_mean_for_decoding=False)[1]
-            # behavior_pred_test = model.forward(spikes_test, n_samples=1, use_mean_for_decoding=False)[1]
-            # convert to numpy
-            # pred_train = behavior_pred_train.numpy() > 0
-            # pred_test = behavior_pred_test.numpy() > 0        
-            pred_train_stim = torch.argmax(behavior_pred_train[:, :2], dim=1).numpy()
-            pred_test_stim = torch.argmax(behavior_pred_test[:, :2], dim=1).numpy()
-            pred_train_choice = torch.argmax(behavior_pred_train[:, 2:4], dim=1).numpy()
-            pred_test_choice = torch.argmax(behavior_pred_test[:, 2:4], dim=1).numpy()    
-            # compute accuracy        
-            accuracy_train_stim = accuracy_score(y_train[:, 0], pred_train_stim)
-            accuracy_test_stim = accuracy_score(y_test[:, 0], pred_test_stim)        
-            # do the same for choice
-            accuracy_train_choice = accuracy_score(y_train[:, 1], pred_train_choice)
-            accuracy_test_choice = accuracy_score(y_test[:, 1], pred_test_choice)
+        accuracy_train_stim, accuracy_test_stim, accuracy_val_stim, accuracy_train_choice, accuracy_test_choice, accuracy_val_choice = utils.get_decoding_accuracies(model, behaviour_data_train, behaviour_data_test, behaviour_data_val, spikes_train, spikes_test, spikes_val)
     else:
-        accuracy_train_stim, accuracy_test_stim, accuracy_train_choice, accuracy_test_choice = 0, 0, 0, 0
+        accuracy_train_stim, accuracy_test_stim, accuracy_val_stim, accuracy_train_choice, accuracy_test_choice, accuracy_val_choice = 0, 0, 0, 0, 0, 0
     
     # dump all results
     pth = utils.model_store_path(config, model.arch_name)
     with open(os.path.join(pth, 'all_results.pkl'), 'wb') as f:
-        to_dump = (train_losses, test_losses, bits_per_spike_train, bits_per_spike_test, accuracy_train_stim, accuracy_test_stim, accuracy_train_choice, accuracy_test_choice)
+        to_dump = (train_losses, test_losses, bits_per_spike_train, bits_per_spike_test, bits_per_spike_val, accuracy_train_stim, accuracy_test_stim, accuracy_val_stim, accuracy_train_choice, accuracy_test_choice, accuracy_val_choice)
         pickle.dump(to_dump, f)
 
 
@@ -254,17 +235,39 @@ def one_train(config, device):
 
 def loop_fixed(idx):
     print("Exp with idx = {}".format(idx))
-    config = deepcopy(config_global)    
-    # config['dir']['results'] = 'results/seed_pt'
-    # config['dir']['results'] = 'results/seed_peakearly'
-    # config['dir']['results'] = 'results/seed_dynamicpt_cnn'
-    # config['dir']['results'] = 'results/seed_dynamicpt_nocnn'
-    config['dir']['results'] = 'results/vae_gp_nounimodality_cnn'
-
+    config = deepcopy(config_global)
+    # no unimodality, no cnn
+    config['dir']['results'] = 'results_val_oldsplit_alln/vae_gp'
+    config['vae_gp']['monotonic']['use'] = False
+    config['decoder']['which'] = ''
     for seed in range(idx, idx+10):
         config['seed'] = seed
         print("Seed = {}".format(seed))
-        one_train(config, device)        
+        one_train(config, device)
+    # unimodality, no cnn
+    config['dir']['results'] = 'results_val_oldsplit_alln/vae_gp_uni'
+    config['vae_gp']['monotonic']['use'] = True
+    config['decoder']['which'] = ''
+    for seed in range(idx, idx+10):
+        config['seed'] = seed
+        print("Seed = {}".format(seed))
+        one_train(config, device)
+    # no unimodality, cnn
+    config['dir']['results'] = 'results_val_oldsplit_alln/vae_gp_cnn'
+    config['vae_gp']['monotonic']['use'] = False
+    config['decoder']['which'] = 'cnn_indi'
+    for seed in range(idx, idx+10):
+        config['seed'] = seed
+        print("Seed = {}".format(seed))
+        one_train(config, device)
+    # unimodality, cnn
+    config['dir']['results'] = 'results_val_oldsplit_alln/vae_gp_uni_cnn'
+    config['vae_gp']['monotonic']['use'] = True
+    config['decoder']['which'] = 'cnn_indi'
+    for seed in range(idx, idx+10):
+        config['seed'] = seed
+        print("Seed = {}".format(seed))
+        one_train(config, device)
 
 # create optuna function
 def objective_(trial):
