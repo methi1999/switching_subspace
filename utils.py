@@ -31,8 +31,9 @@ def get_decoding_accuracies(model, behaviour_data, spikes):
         model.eval()
         behavior_pred = model.forward(spikes, n_samples=1, use_mean_for_decoding=True)[1]                
         pred_stim = torch.argmax(behavior_pred[:, :2], dim=1).numpy()        
-        pred_choice = torch.argmax(behavior_pred[:, 2:4], dim=1).numpy()
-        
+        pred_choice = torch.argmax(behavior_pred[:, 2:4], dim=1).numpy()        
+        # pred_stim = (behavior_pred[:, 0] > 0.5).numpy()        
+        # pred_choice = (behavior_pred[:, 1] > 0.5).numpy()        
         # compute accuracy        
         accuracy_stim = accuracy_score(behaviour_data[:, 0], pred_stim)        
         # do the same for choice

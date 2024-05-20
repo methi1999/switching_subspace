@@ -7,6 +7,115 @@ LOG2 = torch.log(torch.tensor(2))
 
 
 
+class LogReg(nn.Module):
+    def __init__(self, config, xz_list):
+        super().__init__()
+        self.stim_dim = config['decoder']['stimulus_latent']        
+        self.choice_dim = config['decoder']['choice_latent']
+        self.amp_dim = config['decoder']['amplitude_latent']
+        time_bins = 25
+        
+        # check atleast 1 is not None
+        assert self.stim_dim is not None or self.choice_dim is not None or self.amp_dim is not None, "Atleast one of stimulus, choice or amplitude should be set"        
+
+        if self.stim_dim is not None:
+            self.stimulus_weight = config['decoder']['stimulus_weight']
+            self.stim_start = 0
+            self.stim_xdim = xz_list[self.stim_dim]
+            self.classifier_stim = nn.Linear(self.stim_xdim*time_bins, 2)
+            print("Using stimulus decoder")
+        else:
+            self.classifier_stim = None
+
+        if self.choice_dim is not None:
+            self.choice_weight = config['decoder']['choice_weight']
+            self.choice_start = 0 if self.stim_dim is None else self.stim_xdim
+            self.choice_xdim = xz_list[self.choice_dim]
+            self.classifier_choice = nn.Linear(self.choice_xdim*time_bins, 2)
+            print("Using choice decoder")
+        else:
+            self.classifier_choice = None            
+                                 
+        # normalize
+        self.normalize_trials = config['decoder']['cnn']['normalize_trial_time']
+        # name
+        # self.arch_name = 'cnn_{}_{}_{}_{}_{}'.format('-'.join([str(x) for x in channels]), kernel_size, self.stim_dim, self.choice_dim, self.amp_dim)
+        self.arch_name = 'logreg_{}_{}_{}'.format(self.stim_dim, self.choice_dim, self.amp_dim)
+        # optimizer
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=config['decoder']['cnn']['lr'], weight_decay=config['decoder']['cnn']['weight_decay'])
+        # self.scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=[60, 90, 120, 150, 180], gamma=0.5)
+        if config['decoder']['scheduler']['which'] == 'cosine':
+            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optimizer, T_0=config['decoder']['scheduler']['cosine_restart_after'])
+            print('Using cosine annealing for decoder')
+        elif config['decoder']['scheduler']['which'] == 'decay':
+            self.scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=config['decoder']['scheduler']['const_factor'])
+            print('Using decay annealing for decoder')
+        else:
+            print('Scheduler not implemented for decoder')
+            self.scheduler = None
+
+    def log_reg_forward(self, x, z, z_dim, x_s_dim, x_dim_len, model):
+        x = x[:, x_s_dim: x_s_dim+x_dim_len, :]
+        z = z[:, z_dim: z_dim+1, :]
+        x = x * z
+        # flatten across last two dimensions
+        x = model(x.view(x.size(0), -1))
+        return x
+
+    
+    def forward(self, x, z):
+        # x is of shape (batch_size*num_samples, seq_len, input_dim)                
+        # z = z.detach()
+        # x = x * z
+        if self.normalize_trials:
+            x = x - x.mean(dim=1, keepdim=True)
+            # x = x / torch.abs(x).max(dim=1, keepdim=True).values
+        x = x.permute(0, 2, 1)
+        z = z.permute(0, 2, 1)
+        if self.classifier_stim:
+            x_stim = self.log_reg_forward(x, z, self.stim_dim, self.stim_start, self.stim_xdim, self.classifier_stim)                        
+        else:
+            # x_stim = torch.zeros(x.size(0), 1, device=x.device)        
+            x_stim = torch.zeros(x.size(0), 2, device=x.device)            
+        
+        
+        if self.classifier_choice:
+            x_choice = self.log_reg_forward(x, z, self.choice_dim, self.choice_start, self.choice_xdim, self.classifier_choice)
+            
+        else:
+            # x_choice = torch.zeros(x.size(0), 1, device=x.device)
+            x_choice = torch.zeros(x.size(0), 2, device=x.device)
+            
+        
+        x_amp = torch.zeros(x.size(0), 1, device=x.device)        
+        return torch.cat([x_stim, x_choice], dim=1), x_amp
+
+    def loss(self, predicted, ground_truth, amp_pred, amp_batch, reduction='mean'):
+        """
+        Binary cross entropy loss
+        predicted: (batch_size*num_samples, 4)
+        ground_truth: (batch_size, 2)
+        """
+        batch_size = ground_truth.size(0)
+        num_samples = predicted.size(0)//batch_size
+        # repeat ground truth        
+        ground_truth = torch.cat([ground_truth]*num_samples, dim=0)                
+        amp_batch = torch.cat([amp_batch]*num_samples, dim=0)
+        # for bceloss        
+        cel_loss = nn.CrossEntropyLoss(reduction=reduction)        
+        loss = 0 
+
+        if self.classifier_stim:
+            # loss += cel_loss(predicted[:, 0], ground_truth[:, 0]) * self.stimulus_weight            
+            loss += cel_loss(predicted[:, :2], ground_truth[:, 0]) * self.stimulus_weight
+                    
+        if self.classifier_choice:
+            # loss += cel_loss(predicted[:, 1], ground_truth[:, 1]) * self.choice_weight
+            loss += cel_loss(predicted[:, 2:4], ground_truth[:, 1]) * self.choice_weight
+            
+
+        return loss
+
 
 class CNNDecoderIndividual(nn.Module):
     def __init__(self, config, xz_list):
@@ -65,7 +174,7 @@ class CNNDecoderIndividual(nn.Module):
         if self.amp_dim is not None:
             self.amp_weight = config['decoder']['amplitude_weight']
             self.amp_xdim = xz_list[self.amp_dim]
-            self.conv_amp = nn.Sequential(*make_1d_conv(self.amp_xdim, 1, amp_channels, amp_kernel_size))
+            self.conv_amp = nn.Sequential(*make_1d_conv(self.amp_xdim, 2, amp_channels, amp_kernel_size))
             if self.stim_dim and self.choice_dim:
                 self.amp_start = self.stim_xdim + self.choice_xdim
             elif self.stim_dim:
@@ -99,13 +208,21 @@ class CNNDecoderIndividual(nn.Module):
             self.scheduler = None
     
     def cnn_forward_maxpool(self, x, z, z_dim, x_s_dim, x_dim_len, conv):
-        x = x[:, x_s_dim: x_s_dim+x_dim_len, :]        
-        z = z[:, z_dim: z_dim+1, :]        
+        x = x[:, x_s_dim: x_s_dim+x_dim_len, :]
+        z = z[:, z_dim: z_dim+1, :]     
         x = conv(x)
         x = x * z
-        # x = torch.mean(x, dim=2)
+        # print(torch.argmax(x, dim=2))
+        # x = x[:, :, 10:]
         x = torch.max(x, dim=2).values
         return x
+    
+        # pred_0 = torch.abs(x[:, 0] - x[:, 1])
+        # best_pred = torch.argmax(pred_0, dim=1)
+        # # x = x * z
+        # # x = torch.mean(x, dim=2)
+        # print(best_pred)
+        # return x[:, :, best_pred]
 
     def cnn_forward(self, x, z, z_dim, x_s_dim, x_dim_len, conv):                       
         x = x[:, x_s_dim: x_s_dim+x_dim_len, :]
@@ -157,7 +274,7 @@ class CNNDecoderIndividual(nn.Module):
             x_stim = torch.zeros(x.size(0), 2, device=x.device)
             if self.cross_terms:
                 x_choicepred = torch.zeros(x.size(0), 2, device=x.device)
-        
+        # print('choice')
         if self.conv_choice:
             x_choice = self.cnn_forward_maxpool(x, z, self.choice_dim, self.choice_start, self.choice_xdim, self.conv_choice)
             if self.cross_terms:
@@ -190,26 +307,26 @@ class CNNDecoderIndividual(nn.Module):
         ground_truth = torch.cat([ground_truth]*num_samples, dim=0)                
         amp_batch = torch.cat([amp_batch]*num_samples, dim=0)
         # for bceloss
-        # loss_fn = nn.BCEWithLogitsLoss(reduction=reduction)
-        # ground_truth = ground_truth.float()
+        # cel_loss = nn.BCEWithLogitsLoss(reduction=reduction)
+        ground_truth = ground_truth.float()
         # print(ground_truth.dtype, predicted.dtype)
         cel_loss = nn.CrossEntropyLoss(reduction=reduction)
         # amp_loss = nn.MSELoss(reduction=reduction)
-        amp_loss = nn.BCELoss(reduction=reduction)
+        # amp_loss = nn.BCELoss(reduction=reduction)
         loss = 0 
 
         if self.conv_stim:
             # loss += cel_loss(predicted[:, 0], ground_truth[:, 0]) * self.stimulus_weight            
             loss += cel_loss(predicted[:, :2], ground_truth[:, 0]) * self.stimulus_weight
             if self.cross_terms:
-                loss += self.stimulus_weight * (predicted[:, 6:8] ** 2).mean() / 2
+                loss += self.stimulus_weight * ((predicted[:, 6] - predicted[:, 7]) ** 2).mean() / 2
                 # loss += 0.25 * self.stimulus_weight * (cel_loss(predicted[:, 6:8], ground_truth[:, 1]) - LOG2)**2                
         
         if self.conv_choice:
             # loss += cel_loss(predicted[:, 1], ground_truth[:, 1]) * self.choice_weight
             loss += cel_loss(predicted[:, 2:4], ground_truth[:, 1]) * self.choice_weight
             if self.cross_terms:
-                loss += self.choice_weight * (predicted[:, 4:6]**2).mean() / 2
+                loss += self.choice_weight * ((predicted[:, 4] - predicted[:, 5])**2).mean() / 2
                 # loss += 0.25 * self.choice_weight * (cel_loss(predicted[:, 4:6], ground_truth[:, 0]) - LOG2)**2                
         
         if self.conv_amp:                        

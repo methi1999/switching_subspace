@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from decoder import LinearAccDecoder, CNNDecoder, CNNDecoderIndividual, RNNDecoderIndivdual
+from decoder import LinearAccDecoder, CNNDecoder, CNNDecoderIndividual, RNNDecoderIndivdual, LogReg
 from vae import VAE
 from vae_family import VAEParameterised
 from vae_gp_separate import VAEGP
@@ -39,6 +39,8 @@ class Model(nn.Module):
         if behavior_decoder == 'linear':            
             self.behavior_decoder = LinearAccDecoder(config, xz_list)                        
             print('Number of trainable parameters in behavior decoder:', utils.count_parameters(self.behavior_decoder))
+        elif behavior_decoder == 'logreg':
+            self.behavior_decoder = LogReg(config, xz_list)
         elif behavior_decoder == 'cnn':
             self.behavior_decoder = CNNDecoder(config, xz_list)            
             print('Number of trainable parameters in behavior decoder:', utils.count_parameters(self.behavior_decoder))

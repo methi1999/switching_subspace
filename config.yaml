@@ -49,8 +49,9 @@ vae_gp:
   
   load_stage1: #vae_gp_2_8_weights_[1, 1, 1]_dynamic_stage1.pth  
   freeze_encoder_meanz: False
-  load_stage2: #allweights.pth
-  load_stage2: post_stage_3.pth
+  load_stage2: post_stage_2_nocnn.pth
+  # load_stage2: post_stage_2_cnncross.pth
+  # load_stage2: post_stage_3.pth
   
   rnn_encoder:
     bidirectional: True
@@ -91,6 +92,7 @@ decoder:
   amplitude_weight:
   
   which: 'cnn_indi'
+  # which: 'logreg'
   # which: ''
   train_decoder_after: 0
   cross_terms: False
@@ -104,7 +106,7 @@ decoder:
     dropout: 0
     lr: 0.01
     weight_decay: 0
-    normalize_trial_time: True
+    normalize_trial_time: False
 
   rnn:
     layers: 1

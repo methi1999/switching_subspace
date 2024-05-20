@@ -234,6 +234,7 @@ class TimeSeriesCombined(nn.Module):
         inp_dim = hidden_dim*2 if bidirectional else hidden_dim
         self.posterior_mean_z = nn.Sequential(*get_linear(inp_dim, latent_dim_z, hidden_layers, dropout))
         self.posterior_mean_x = nn.Sequential(*get_linear(inp_dim, latent_dim_x, hidden_layers, dropout))
+        # self.posterior_mean = nn.Sequential(*get_linear(inp_dim, latent_dim_x+latent_dim_z, hidden_layers, dropout))
         
         self.cov_type = model_config['cov_type']
         if self.cov_type == 'full':
@@ -294,7 +295,7 @@ class TimeSeriesCombined(nn.Module):
 
 
         # for each module, print number of parameters
-        print('Number of trainable parameters in RNN:', sum(p.numel() for p in self.rnn.parameters()))
+        print('Number of trainable parameters in RNN:', sum(p.numel() for p in self.rnn.parameters() if p.requires_grad))
         print('Number of trainable parameters in Posterior Mean X:', sum(p.numel() for p in self.posterior_mean_x.parameters()))
         print('Number of trainable parameters in Posterior Mean Z:', sum(p.numel() for p in self.posterior_mean_z.parameters()))
         print('Number of trainable parameters in Block Diagonal Z:', sum(p.numel() for p in self.post_z.parameters()))
@@ -307,6 +308,8 @@ class TimeSeriesCombined(nn.Module):
         # mean is of shape (batch, time, latent_dim)
         mean_z = self.posterior_mean_z(encoded)
         mean_x = self.posterior_mean_x(encoded)       
+        # m = self.posterior_mean(encoded)
+        # mean_z, mean_x = m[:, :, :self.dim_z], m[:, :, self.dim_z:]
         
         # construct z distribution
         bd_z = self.post_z(encoded)
