@@ -26,14 +26,15 @@ behave_columns = ['outcome_cat_correct', 'outcome_cat_error', 'outcome_cat_spoil
 
 
 def get_decoding_accuracies(model, behaviour_data, spikes):    
-
+    
     with torch.no_grad():
         model.eval()
-        behavior_pred = model.forward(spikes, n_samples=1, use_mean_for_decoding=True)[1]                
-        pred_stim = torch.argmax(behavior_pred[:, :2], dim=1).numpy()        
-        pred_choice = torch.argmax(behavior_pred[:, 2:4], dim=1).numpy()        
-        # pred_stim = (behavior_pred[:, 0] > 0.5).numpy()        
-        # pred_choice = (behavior_pred[:, 1] > 0.5).numpy()        
+        behavior_pred = model.forward(spikes, n_samples=1, use_mean_for_decoding=True)[1]
+        # print(behavior_pred[:, :2], behavior_pred[:, 2:4])
+        # pred_stim = torch.argmax(behavior_pred[:, :2], dim=1).numpy()
+        # pred_choice = torch.argmax(behavior_pred[:, 2:4], dim=1).numpy()
+        pred_stim = (behavior_pred[:, 0] > 0).numpy()        
+        pred_choice = (behavior_pred[:, 1] > 0).numpy()        
         # compute accuracy        
         accuracy_stim = accuracy_score(behaviour_data[:, 0], pred_stim)        
         # do the same for choice

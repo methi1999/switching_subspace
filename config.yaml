@@ -1,4 +1,5 @@
 dir:
+  # results: 'results_final/'
   results: 'results/'
   dataset: '../data_own/'
 
@@ -47,11 +48,18 @@ vae_gp:
   z_entropy:
   softmax_temp: 1  
   
-  load_stage1: #vae_gp_2_8_weights_[1, 1, 1]_dynamic_stage1.pth  
+  # load_stage1: post_stage1_priorx_null2
+  # freeze_encoder_meanz: True
+  # load_stage2: False
+
+  # load_stage1: post_stage1_priorx
+  # freeze_encoder_meanz: True  
+  # load_stage2: False
+
+  load_stage1: 
   freeze_encoder_meanz: False
-  load_stage2: post_stage_2_nocnn.pth
-  # load_stage2: post_stage_2_cnncross.pth
-  # load_stage2: post_stage_3.pth
+  load_stage2: True
+  
   
   rnn_encoder:
     bidirectional: True
@@ -87,8 +95,8 @@ decoder:
   choice_latent: 1
   amplitude_latent:
 
-  stimulus_weight: 20
-  choice_weight: 10
+  stimulus_weight: 10
+  choice_weight: 5
   amplitude_weight:
   
   which: 'cnn_indi'
@@ -106,7 +114,7 @@ decoder:
     dropout: 0
     lr: 0.01
     weight_decay: 0
-    normalize_trial_time: False
+    normalize_trial_time: True
 
   rnn:
     layers: 1
@@ -124,7 +132,7 @@ decoder:
     cosine_restart_after: 120
     const_factor: 0.99
 
-seed: 21
+seed: 7
 
 early_stop:
   patience: 300

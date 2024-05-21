@@ -246,7 +246,9 @@ class TimeSeriesCombined(nn.Module):
         else:
             raise ValueError('Invalid covariance type')
         
-        self.cov_x = nn.Sequential(*get_linear(inp_dim, latent_dim_x*latent_dim_x, hidden_layers, dropout))
+        ### gp on x
+        # self.cov_x = nn.Sequential(*get_linear(inp_dim, latent_dim_x*latent_dim_x, hidden_layers, dropout))
+        self.cov_x = nn.Sequential(*get_linear(inp_dim, latent_dim_x, hidden_layers, dropout))
         
         self.smoothing_sigma = model_config['smoothing_sigma']
         if self.smoothing_sigma:            
@@ -285,14 +287,12 @@ class TimeSeriesCombined(nn.Module):
         if model_config['load_stage1']:
             print('Loading weights for s1')
             weights = torch.load(model_config['load_stage1'])
-            self.load_state_dict(weights)
-            print('Weights loaded for s1')            
+            self.load_state_dict(weights, strict=False)
+            print("Loaded following weights:", set(weights.keys()).intersection(set(self.state_dict().keys())))
             if model_config['freeze_encoder_meanz']:
                 self.rnn.requires_grad_(False)
                 self.posterior_mean_z.requires_grad_(False)
                 print('Encoder and Posterior Mean Z frozen')        
-
-
 
         # for each module, print number of parameters
         print('Number of trainable parameters in RNN:', sum(p.numel() for p in self.rnn.parameters() if p.requires_grad))
@@ -347,12 +347,26 @@ class TimeSeriesCombined(nn.Module):
         else:
             raise ValueError('Invalid covariance type')
 
-        # construct x distribution
-        cov_x = self.cov_x(encoded)
+        ### gp on x
+        # # construct x distribution
+        # cov_x = self.cov_x(encoded)
+        # batch, time, dim = mean_x.shape
+        # mean_x_flat = mean_x.view(batch*time, dim)        
+        # cov_x_flat = cov_x.view(batch*time, dim, dim)
+        # x_distribution = CustomDistribution(mean_x_flat, cholesky_cov=cov_x_flat)
+        ########## new
+        x_distribution = []
+        mean_x[:, :, :2] = mean_x[:, :, :2] - mean_x[:, 0:1, :2]
+        cov_x = self.cov_x(encoded)[:]
         batch, time, dim = mean_x.shape
-        mean_x_flat = mean_x.view(batch*time, dim)        
-        cov_x_flat = cov_x.view(batch*time, dim, dim)
-        x_distribution = CustomDistribution(mean_x_flat, cholesky_cov=cov_x_flat)
+        for i in range(dim):                    
+            # diag_elems = torch.exp(bd_z[:, :, i])
+            diag_elems = (cov_x[:, :, i])**2
+            # contruct a distribution with diagonal elements
+            # distribution = torch.distributions.MultivariateNormal(mean_z[:, :, i], scale_tril=torch.diag_embed(diag_elems))                
+            distribution = CustomDistribution(mean_x[:, :, i], cholesky_cov=torch.diag_embed(diag_elems))
+            x_distribution.append(distribution)
+
 
         to_ret_dict = {'z_distributions': z_distribution, 'x_distribution': x_distribution}
         # monotonicity constraint        
@@ -434,14 +448,16 @@ class VAEGPCombined(nn.Module):
         # y is of shape (batch_size, seq_len, input_dim)
         batch, seq, _ = y.shape         
         out_dict = self.zx_encoder(y)
-        z_distributions, x_distribution = out_dict['z_distributions'], out_dict['x_distribution']        
+        z_distributions, x_distributions = out_dict['z_distributions'], out_dict['x_distribution']        
         # sample from distributions. shape is (batch*samples, seq, x/z)        
         # z_samples = torch.stack([d.sample((n_samples,)).view(n_samples*batch, seq) for d in z_distributions], dim=-1)        
         z_samples_pre = torch.stack([torch.cat([z_distribution.sample() for _ in range(n_samples)], dim=0) for z_distribution in z_distributions], dim=-1)
-        # print(z_samples.shape)
-        x_samples = torch.cat([x_distribution.sample().view(batch, seq, -1) for _ in range(n_samples)], dim=0)        
-        # print(x_samples.shape, z_samples.shape)
         z_samples = torch.nn.Softmax(dim=2)(z_samples_pre/self.softmax_temp)
+        # print(z_samples.shape)
+        ### gp on x
+        # x_samples = torch.cat([x_distributions.sample().view(batch, seq, -1) for _ in range(n_samples)], dim=0)        
+        ###### new
+        x_samples = torch.stack([torch.cat([x_distribution.sample() for _ in range(n_samples)], dim=0) for x_distribution in x_distributions], dim=-1)        
 
         # x_samples = torch.cat([x_distribution.sample().view(batch, seq, -1) for _ in range(1)], dim=0)        
         # # construct z0 as 1-(z1+z2)/2
@@ -494,8 +510,9 @@ class VAEGPCombined(nn.Module):
         # loss = recon_loss * 0.01
 
         if self.beta:            
-            # kl divergence            
-            kl_x = x_distribution.kl_divergence_normal()
+            # kl divergence
+            ### gp on x
+            # kl_x = x_distribution.kl_divergence_normal()
             if USING_TORCH_DIST:
                 kl_z = self.zx_encoder.kl_divergence_z(z_distributions)            
             else:
@@ -506,6 +523,14 @@ class VAEGPCombined(nn.Module):
                         kl_z += kld
                     else:
                         kl_z += d.kl_divergence_normal()
+                ### gp on x
+                kl_x = 0
+                for d in x_distribution:
+                    if self.using_smoothing:
+                        kld = d.kl_divergence_any(torch.zeros_like(d.mean), self.zx_encoder.cov_prior, self.zx_encoder.prior_inv, self.zx_encoder.prior_log_det)
+                        kl_x += kld
+                    else:
+                        kl_x += d.kl_divergence_normal()
                      
             kl = kl_x + kl_z
             loss += self.beta * kl            
@@ -558,6 +583,10 @@ class VAEGPCombined(nn.Module):
             # loss += coef * torch.clamp((torch.sign(g[:, :, 1]) - rolled_g0), min=0).sum()
             # loss += coef * torch.clamp((torch.tanh(5*g[:, :, 1]) - rolled_g0), min=0).sum()
 
+        # make sure that x_mean[0] and x_mean[-1] == 0
+        # print(model_output['x_distribution'][0].mean.shape)        
+        # loss += torch.stack([x.mean[:, 0].pow(2) for x in model_output['x_distribution'][:2]]).sum() * 10
+        # loss += torch.stack([x.mean[:, -1].pow(2) for x in model_output['x_distribution'][:2]]).sum() * 10
 
         return loss/(batch * num_samples)
     
@@ -571,8 +600,11 @@ class VAEGPCombined(nn.Module):
         else:
             y_recon = vae_output['y_recon'].detach().numpy()
             batch, time, _ = y_recon.shape
-            mean_x = vae_output['x_distribution'].mean.detach().numpy().reshape(batch, time, -1)
-            cov_x = vae_output['x_distribution'].get_covariance_matrix().detach().numpy().reshape(batch, time, self.x_dim, self.x_dim)
+            ### gp on x
+            # mean_x = vae_output['x_distribution'].mean.detach().numpy().reshape(batch, time, -1)
+            # cov_x = vae_output['x_distribution'].get_covariance_matrix().detach().numpy().reshape(batch, time, self.x_dim, self.x_dim)
+            mean_x = torch.stack([x.mean for x in vae_output['x_distribution']], dim=-1).detach().numpy()
+            cov_x = torch.stack([x.get_covariance_matrix() for x in vae_output['x_distribution']], dim=-1).detach().numpy()
             mean_z = torch.stack([x.mean for x in vae_output['z_distributions']], dim=-1).detach().numpy()
             cov_z = torch.stack([x.get_covariance_matrix() for x in vae_output['z_distributions']], dim=-1).detach().numpy()
         if self.zx_encoder.monotonic:

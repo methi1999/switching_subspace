@@ -1,8 +1,9 @@
-__pycache__
 results/
+results_final/
+anqi_ppt/
 .idea/
 .vscode/
-anqi_ppt/
+
+__pycache__
 *.pkl
 *.pth
-results

@@ -80,16 +80,22 @@ class Model(nn.Module):
 
         if config['vae_gp']['load_stage2']:
             print('Loading weights for s2')
-            weights = torch.load(config['vae_gp']['load_stage2'])
+            pth = os.path.join(utils.model_store_path(config, self.arch_name), 'post_stage_2.pth')
+            weights = torch.load(pth)
+            # print(weights.keys(), self.state_dict().keys())
+            # intersect keys
+            keys = set(weights.keys()).intersection(set(self.state_dict().keys()))            
             self.load_state_dict(weights, strict=False)
-            print('Weights loaded for s2')
+            print('Weights loaded for s2:', keys)
             assert config['vae_gp']['freeze_encoder_meanz'] is False, "Cannot freeze encoder after stage 2"
     
     def forward(self, spikes, n_samples, use_mean_for_decoding):
         vae_output = self.vae(spikes, n_samples)        
         if self.behavior_decoder:
             if use_mean_for_decoding:
-                mean_x, mean_z = vae_output['x_distribution'].mean, torch.stack([x.mean for x in vae_output['z_distributions']], dim=-1)                
+                ### gp on x
+                # mean_x, mean_z = vae_output['x_distribution'].mean, torch.stack([x.mean for x in vae_output['z_distributions']], dim=-1)                
+                mean_x, mean_z = torch.stack([x.mean for x in vae_output['x_distribution']], dim=-1), torch.stack([x.mean for x in vae_output['z_distributions']], dim=-1)                
                 softmax = nn.Softmax(dim=-1)
                 mean_z = softmax(mean_z)
                 mean_x = mean_x.reshape(mean_z.shape[0], mean_z.shape[1], -1)

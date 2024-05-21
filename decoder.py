@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import math
-
+import random
 
 LOG2 = torch.log(torch.tensor(2))
 
@@ -157,7 +157,7 @@ class CNNDecoderIndividual(nn.Module):
             self.stimulus_weight = config['decoder']['stimulus_weight']
             self.stim_start = 0
             self.stim_xdim = xz_list[self.stim_dim]
-            self.conv_stim = nn.Sequential(*make_1d_conv(self.stim_xdim, 2, stimchoice_channels, stimchoice_kernel_size))
+            self.conv_stim = nn.Sequential(*make_1d_conv(self.stim_xdim, 1, stimchoice_channels, stimchoice_kernel_size))
             print("Using stimulus decoder")
         else:
             self.conv_stim = None
@@ -166,7 +166,7 @@ class CNNDecoderIndividual(nn.Module):
             self.choice_weight = config['decoder']['choice_weight']
             self.choice_start = 0 if self.stim_dim is None else self.stim_xdim
             self.choice_xdim = xz_list[self.choice_dim]
-            self.conv_choice = nn.Sequential(*make_1d_conv(self.choice_xdim, 2, stimchoice_channels, stimchoice_kernel_size))
+            self.conv_choice = nn.Sequential(*make_1d_conv(self.choice_xdim, 1, stimchoice_channels, stimchoice_kernel_size))
             print("Using choice decoder")
         else:
             self.conv_choice = None            
@@ -174,7 +174,7 @@ class CNNDecoderIndividual(nn.Module):
         if self.amp_dim is not None:
             self.amp_weight = config['decoder']['amplitude_weight']
             self.amp_xdim = xz_list[self.amp_dim]
-            self.conv_amp = nn.Sequential(*make_1d_conv(self.amp_xdim, 2, amp_channels, amp_kernel_size))
+            self.conv_amp = nn.Sequential(*make_1d_conv(self.amp_xdim, 1, amp_channels, amp_kernel_size))
             if self.stim_dim and self.choice_dim:
                 self.amp_start = self.stim_xdim + self.choice_xdim
             elif self.stim_dim:
@@ -208,14 +208,35 @@ class CNNDecoderIndividual(nn.Module):
             self.scheduler = None
     
     def cnn_forward_maxpool(self, x, z, z_dim, x_s_dim, x_dim_len, conv):
-        x = x[:, x_s_dim: x_s_dim+x_dim_len, :]
-        z = z[:, z_dim: z_dim+1, :]     
-        x = conv(x)
-        x = x * z
+        x_part = x[:, x_s_dim: x_s_dim+x_dim_len, :]
+        # if z_dim == 0:
+        #     print(x_part[10])
+        z_part = z[:, z_dim: z_dim+1, :]     
+        # if z_dim == 0:
+        #     print(z_part[0, :])
+        # x_part = x[:, x_s_dim: x_s_dim+x_dim_len, 10:-5]
+        # z_part = z[:, z_dim: z_dim+1, 10:-5]     
+        # x_part = x_part * z_part
+        x_part = conv(x_part)
+        if self.eval():
+            x_part = x_part * z_part
+            # x_part = x_part * (z_part > 0.3)
+            # if z_dim == 0:
+            #     print(z_part[10], x_part[10])
+        else:
+            x_part = x_part * (z_part > random.uniform(0.33, 0.5))
+
         # print(torch.argmax(x, dim=2))
         # x = x[:, :, 10:]
-        x = torch.max(x, dim=2).values
-        return x
+        # x_part = torch.max(x_part, dim=2).values        
+        # if z_dim == 0:
+        #     import matplotlib.pyplot as plt
+        #     plt.plot(x_part[0, 0])
+        #     print(x_part[0, 0].mean())            
+        #     plt.show()
+        # x_part = torch.max(x_part, dim=2).values
+        x_part = torch.mean(x_part, dim=2)
+        return x_part
     
         # pred_0 = torch.abs(x[:, 0] - x[:, 1])
         # best_pred = torch.argmax(pred_0, dim=1)
@@ -224,51 +245,61 @@ class CNNDecoderIndividual(nn.Module):
         # print(best_pred)
         # return x[:, :, best_pred]
 
-    def cnn_forward(self, x, z, z_dim, x_s_dim, x_dim_len, conv):                       
-        x = x[:, x_s_dim: x_s_dim+x_dim_len, :]
-        z = z[:, z_dim: z_dim+1, :]        
-        x = conv(x)
-        # x = x * (z > 0.4)
-        x = x * z
-        # aply relu
-        x = torch.sigmoid(x)
-        return x
-    
-    # def cnn_forward(self, x, z, z_dim, x_s_dim, x_e_dim, conv):
-    #     x = x[:, x_s_dim: x_e_dim+1, :]
-    #     z = z[:, z_dim: z_dim+1, :]
-    #     # original
-    #     # keep only certain predictions
-    #     # zero out all x values outside a window of 3 around the peak of z
-    #     peak_z = torch.argmax(z, dim=2).squeeze(-1)                
-    #     mask = torch.zeros_like(x[:, 0, :])                
-    #     mask.scatter_(1, peak_z.unsqueeze(1), 1)
-    #     mask.scatter_(1, torch.clip(peak_z-1, 0).unsqueeze(1), 1)
-    #     mask.scatter_(1, torch.clip(peak_z+1, 0, z.shape[-1]-1).unsqueeze(1), 1)
-    #     mask.scatter_(1, torch.clip(peak_z-2, 0).unsqueeze(1), 1)
-    #     mask.scatter_(1, torch.clip(peak_z+2, 0, z.shape[-1]-1).unsqueeze(1), 1)
-    #     # mask.scatter_(1, torch.clip(peak_z-3, 0).unsqueeze(1), 1)
-    #     # mask.scatter_(1, torch.clip(peak_z+3, 0, z.shape[-1]-1).unsqueeze(1), 1)
-    #     mask = mask.unsqueeze(1)                
-    #     x = x * mask        
-    #     x = conv(x)        
-    #     # x = torch.mean(x, dim=2)
-    #     x = torch.max(x, dim=2).values
+    # def cnn_forward(self, x, z, z_dim, x_s_dim, x_dim_len, conv):                       
+    #     x = x[:, x_s_dim: x_s_dim+x_dim_len, :]
+    #     z = z[:, z_dim: z_dim+1, :]        
+    #     x = conv(x)
+    #     # x = x * (z > 0.4)
+    #     x = x * z
+    #     # aply relu
+    #     x = torch.sigmoid(x)
     #     return x
+    
+    def cnn_forward(self, x, z, z_dim, x_s_dim, x_dim_len, conv):
+        x_part = x[:, x_s_dim: x_s_dim+x_dim_len, :]
+        # if z_dim == 0:
+        #     print(x_part[10])
+        z_part = z[:, z_dim: z_dim+1, :]     
+        # if z_dim == 0:
+        #     print(z_part[0, :])
+        # x_part = x[:, x_s_dim: x_s_dim+x_dim_len, 10:-5]
+        # z_part = z[:, z_dim: z_dim+1, 10:-5]     
+        # x_part = x_part * z_part
+        # original
+        # keep only certain predictions
+        # zero out all x values outside a window of 3 around the peak of z
+        peak_z = torch.argmax(z_part, dim=2).squeeze(-1)                
+        mask = torch.zeros_like(x[:, 0, :])                
+        mask.scatter_(1, peak_z.unsqueeze(1), 1)
+        mask.scatter_(1, torch.clip(peak_z-1, 0).unsqueeze(1), 1)
+        mask.scatter_(1, torch.clip(peak_z+1, 0, z.shape[-1]-1).unsqueeze(1), 1)
+        mask.scatter_(1, torch.clip(peak_z-2, 0).unsqueeze(1), 1)
+        mask.scatter_(1, torch.clip(peak_z+2, 0, z.shape[-1]-1).unsqueeze(1), 1)
+        # mask.scatter_(1, torch.clip(peak_z-3, 0).unsqueeze(1), 1)
+        # mask.scatter_(1, torch.clip(peak_z+3, 0, z.shape[-1]-1).unsqueeze(1), 1)
+        mask = mask.unsqueeze(1)                
+        x_part = x_part * mask
+        x_part = conv(x_part)        
+        x_part = torch.mean(x_part, dim=2)
+        # x_part = torch.max(x_part, dim=2).values
+        return x_part
 
     def forward(self, x, z):
         # x is of shape (batch_size*num_samples, seq_len, input_dim)                
         # z = z.detach()
         # x = x * z
         if self.normalize_trials:
-            x = x - x.mean(dim=1, keepdim=True)
-            # x = x / torch.abs(x).max(dim=1, keepdim=True).values
+            # x = x - x.mean(dim=1, keepdim=True)
+            # # normalise by std
+            x = x - x[:, 0:1, :]
+            x = x / x.std(dim=1, keepdim=True)
+
         x = x.permute(0, 2, 1)
         z = z.permute(0, 2, 1)
         if self.conv_stim:
-            x_stim = self.cnn_forward_maxpool(x, z, self.stim_dim, self.stim_start, self.stim_xdim, self.conv_stim)            
+            x_stim = self.cnn_forward(x, z, self.stim_dim, self.stim_start, self.stim_xdim, self.conv_stim)            
             if self.cross_terms:
-                x_choicepred = self.cnn_forward_maxpool(x, z, self.choice_dim, self.choice_start, self.choice_xdim, self.conv_stim)
+                x_choicepred = self.cnn_forward(x, z, self.choice_dim, self.choice_start, self.choice_xdim, self.conv_stim)
         else:
             # x_stim = torch.zeros(x.size(0), 1, device=x.device)        
             x_stim = torch.zeros(x.size(0), 2, device=x.device)
@@ -276,9 +307,9 @@ class CNNDecoderIndividual(nn.Module):
                 x_choicepred = torch.zeros(x.size(0), 2, device=x.device)
         # print('choice')
         if self.conv_choice:
-            x_choice = self.cnn_forward_maxpool(x, z, self.choice_dim, self.choice_start, self.choice_xdim, self.conv_choice)
+            x_choice = self.cnn_forward(x, z, self.choice_dim, self.choice_start, self.choice_xdim, self.conv_choice)
             if self.cross_terms:
-                x_stimpred = self.cnn_forward_maxpool(x, z, self.stim_dim, self.stim_start, self.stim_xdim, self.conv_choice)
+                x_stimpred = self.cnn_forward(x, z, self.stim_dim, self.stim_start, self.stim_xdim, self.conv_choice)
         else:
             # x_choice = torch.zeros(x.size(0), 1, device=x.device)
             x_choice = torch.zeros(x.size(0), 2, device=x.device)
@@ -300,37 +331,37 @@ class CNNDecoderIndividual(nn.Module):
         Binary cross entropy loss
         predicted: (batch_size*num_samples, 4)
         ground_truth: (batch_size, 2)
-        """
+        """        
         batch_size = ground_truth.size(0)
         num_samples = predicted.size(0)//batch_size
         # repeat ground truth        
         ground_truth = torch.cat([ground_truth]*num_samples, dim=0)                
-        amp_batch = torch.cat([amp_batch]*num_samples, dim=0)
+        # amp_batch = torch.cat([amp_batch]*num_samples, dim=0)
         # for bceloss
-        # cel_loss = nn.BCEWithLogitsLoss(reduction=reduction)
+        cel_loss = nn.BCEWithLogitsLoss(reduction=reduction)
         ground_truth = ground_truth.float()
         # print(ground_truth.dtype, predicted.dtype)
-        cel_loss = nn.CrossEntropyLoss(reduction=reduction)
+        # cel_loss = nn.CrossEntropyLoss(reduction=reduction)
         # amp_loss = nn.MSELoss(reduction=reduction)
         # amp_loss = nn.BCELoss(reduction=reduction)
         loss = 0 
 
         if self.conv_stim:
-            # loss += cel_loss(predicted[:, 0], ground_truth[:, 0]) * self.stimulus_weight            
-            loss += cel_loss(predicted[:, :2], ground_truth[:, 0]) * self.stimulus_weight
+            loss += cel_loss(predicted[:, 0], ground_truth[:, 0]) * self.stimulus_weight            
+            # loss += cel_loss(predicted[:, :2], ground_truth[:, 0]) * self.stimulus_weight
             if self.cross_terms:
                 loss += self.stimulus_weight * ((predicted[:, 6] - predicted[:, 7]) ** 2).mean() / 2
                 # loss += 0.25 * self.stimulus_weight * (cel_loss(predicted[:, 6:8], ground_truth[:, 1]) - LOG2)**2                
         
         if self.conv_choice:
-            # loss += cel_loss(predicted[:, 1], ground_truth[:, 1]) * self.choice_weight
-            loss += cel_loss(predicted[:, 2:4], ground_truth[:, 1]) * self.choice_weight
+            loss += cel_loss(predicted[:, 1], ground_truth[:, 1]) * self.choice_weight
+            # loss += cel_loss(predicted[:, 2:4], ground_truth[:, 1]) * self.choice_weight
             if self.cross_terms:
                 loss += self.choice_weight * ((predicted[:, 4] - predicted[:, 5])**2).mean() / 2
                 # loss += 0.25 * self.choice_weight * (cel_loss(predicted[:, 4:6], ground_truth[:, 0]) - LOG2)**2                
         
-        if self.conv_amp:                        
-            loss += amp_loss(amp_pred, amp_batch) * self.amp_weight
+        # if self.conv_amp:                        
+        #     loss += amp_loss(amp_pred, amp_batch) * self.amp_weight        
 
         return loss
 
