@@ -8,7 +8,7 @@ from copy import deepcopy
 from model import Model
 import utils
 from early_stopping import EarlyStopping
-from priors import moving_average
+from misc.priors import moving_average
 from sklearn.decomposition import PCA
 
 import torch

@@ -10,7 +10,6 @@ import pickle
 import matplotlib.pyplot as plt
 from sklearn.metrics import accuracy_score
 
-logger = logging.getLogger(__name__)
 
 
 
@@ -23,24 +22,6 @@ behave_columns = ['outcome_cat_correct', 'outcome_cat_error', 'outcome_cat_spoil
        'c0_count', 'c1_count', 'c2_count', 'c3_count', 'c0_angle', 'c1_angle', 'c2_angle', 'c3_angle',
        'time', 'amp']
 
-
-
-def get_decoding_accuracies(model, behaviour_data, spikes):    
-    
-    with torch.no_grad():
-        model.eval()
-        behavior_pred = model.forward(spikes, n_samples=1, use_mean_for_decoding=True)[1]
-        # print(behavior_pred[:, :2], behavior_pred[:, 2:4])
-        # pred_stim = torch.argmax(behavior_pred[:, :2], dim=1).numpy()
-        # pred_choice = torch.argmax(behavior_pred[:, 2:4], dim=1).numpy()
-        pred_stim = (behavior_pred[:, 0] > 0).numpy()        
-        pred_choice = (behavior_pred[:, 1] > 0).numpy()        
-        # compute accuracy        
-        accuracy_stim = accuracy_score(behaviour_data[:, 0], pred_stim)        
-        # do the same for choice
-        accuracy_choice = accuracy_score(behaviour_data[:, 1], pred_choice)        
-    
-    return accuracy_stim, accuracy_choice
 
 
 def extract_mean_covariance(dist):
@@ -60,17 +41,16 @@ def plot_loss_curve(model, config, train_losses, test_losses):
     train_epochs = [x[0] for x in train_losses]
     train_losses_only = np.array([x[1] for x in train_losses])
     test_epochs = [x[0] for x in test_losses]
-    test_losses_only = np.array([x[1] for x in test_losses])
-    behave_weight = config['decoder']['behavior_weight']
+    test_losses_only = np.array([x[1] for x in test_losses])    
     # plot
     fig, ax1 = plt.subplots()
     ax2 = ax1.twinx()
     ax1.plot(train_epochs, train_losses_only[:, 0], label='Train Reconstruction', color='blue', linestyle='--')
     if train_losses_only.shape[1] > 1:
-        ax2.plot(train_epochs, train_losses_only[:, 1]/behave_weight, label='Train Decoding', color='red', linestyle='--')
+        ax2.plot(train_epochs, train_losses_only[:, 1], label='Train Decoding', color='red', linestyle='--')
     ax1.plot(test_epochs, test_losses_only[:, 0], label='Test Reconstruction', color='blue')
     if train_losses_only.shape[1] > 1:
-        ax2.plot(test_epochs, test_losses_only[:, 1]/behave_weight, label='Test Decoding', color='red')
+        ax2.plot(test_epochs, test_losses_only[:, 1], label='Test Decoding', color='red')
     ax1.set_xlabel('Epochs')
     ax1.set_ylabel('Reconstruction Loss', color='blue')
     ax2.set_ylabel('Decoding Loss', color='red')
@@ -118,9 +98,9 @@ def set_seeds(seed):
     torch.random.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
+    # torch.backends.cudnn.deterministic = True
     # torch.backends.cudnn.benchmark = False
-    torch.backends.cudnn.benchmark = True    
+    # torch.backends.cudnn.benchmark = True
 
     
 def neg_log_likelihood(rates, spikes, zero_warning=True):
@@ -157,9 +137,7 @@ def neg_log_likelihood(rates, spikes, zero_warning=True):
     assert np.all(rates >= 0), "neg_log_likelihood: Negative rate predictions found"
     if np.any(rates == 0):
         if zero_warning:
-            logger.warning(
-                "neg_log_likelihood: Zero rate predictions found. Replacing zeros with 1e-9"
-            )
+            raise Warning("neg_log_likelihood: Zero rate predictions found. Replacing zeros with 1e-9")
         rates[rates == 0] = 1e-9
 
     result = rates - spikes * np.log(rates) + gammaln(spikes + 1.0)

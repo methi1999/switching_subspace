@@ -28,7 +28,7 @@ class EarlyStopping:
         self.delta = delta
         self.trace_func = trace_func
 
-    def __call__(self, score, model: Model, save_model, save_prefix):
+    def __call__(self, score: float, model: Model, save_model: bool, save_prefix: str):
 
         # check if score is nan
         if np.isnan(score):
@@ -44,6 +44,7 @@ class EarlyStopping:
                 self.early_stop = True
             self.slow_down = True
         else:
+            # found a new best
             self.best_score = score
             if save_model:
                 model.save_model(save_prefix)

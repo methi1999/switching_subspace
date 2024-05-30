@@ -49,6 +49,7 @@ vae_gp:
   z_entropy: # whether to add entropy term to the loss
   softmax_temp: 1 # temperature for the softmax
   
+  # stage 1 is initializing 
   load_stage1: #post_stage1_priorx_null2
   freeze_encoder_meanz: False
   load_stage2: False
@@ -99,38 +100,39 @@ vae_gp:
     mask: [False, True, False]
 
 # parameters for the supervision
-decoder:
-  behavior_weight: 1
-  
+decoder:  
   # which latents to use
   stimulus_latent: 0
   choice_latent: 1
   amplitude_latent:
-
+  
+  # weights for the loss terms
   stimulus_weight: 20
   choice_weight: 5
   amplitude_weight:
   
-  which: 'cnn_indi'
-  # which: 'logreg'
-  # which: ''
-  
   # train after certain epochs
-  train_decoder_after: 0
-  # whether to use cross terms
-  cross_terms: False  
+  train_decoder_after: 0  
+
+  # which
+  which: 'cnn' # 'cnn', 'rnn' or 'linear'
   
-  cnn:
-    # channels: [4, 4, 4, 4, 4, 4]
+  cnn_global:    
     channels: [8]
     kernel_size: 3
-    amp_channels: [8]
-    amp_kernel_size: 5
     dropout: 0
     lr: 0.01
     weight_decay: 0
-    normalize_trial_time: True
-    which_forward: 'argmax'
+    normalize_trial_time: True # whether to normalize trial across time
+    which_forward: 'argmax' # which forward function to use
+
+  cnn_local:
+    channels: [8]
+    kernel_size: 3
+    dropout: 0
+    lr: 0.01
+    weight_decay: 0
+    normalize_trial_time: True # whether to normalize trial across time
 
   rnn:
     layers: 1
@@ -151,24 +153,14 @@ decoder:
 seed: 7
 
 early_stop:
-  patience: 300
-  delta: 1
-  test_every_new: 2
+  patience: 300 # stop if no improvement after this many epochs
+  delta: 1 # improvement is defined as a decrease of at least this much
+  test_every_new: 2 # how often to test while in slowdown
 
 epochs: 2000
 test_every: 20
-plot_every: 5
 
-batch_size: 192
-optim_size: 192
+batch_size: 192 # batch size for training
+optim_size: 192 # batch size for optimization step
 
-num_samples_train: 20
-
-z_prior:
-  include: False
-  weights: [100, 0]
-  # means and stds multipled by number of bins  
-  means: [0, 1]
-  stds: [0.2, 1]
-  learn: True
-  prior_on_mean: False
+num_samples_train: 20 # number of variational samples for training

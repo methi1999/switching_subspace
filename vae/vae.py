@@ -1,31 +1,24 @@
 import torch
 import torch.nn as nn
 # from decoder import LinearAccDecoder
-from priors import moving_average
+from misc.priors import moving_average
 import math
 import os
 
 eps = 1e-6
 
 class VAE(nn.Module):
-    def __init__(self, config, input_dim, xz_list, neuron_bias=None, init='vae_[1, 1, 1]_8_2_bi_standard'):
+    def __init__(self, config, input_dim, neuron_bias=None):
         super().__init__()               
-        # keep only non-zero values in xz_list
-        xz_list = [x for x in xz_list if x > 0]
-        xz_ends = torch.cumsum(torch.tensor(xz_list), dim=0)
+        # keep only non-zero values in dim_x_z
+        dim_x_z = config['dim_x_z']
+        xz_ends = torch.cumsum(torch.tensor(dim_x_z), dim=0)
         xz_starts = torch.tensor([0] + xz_ends.tolist()[:-1])
-        xz_l = torch.stack([xz_starts, xz_ends], dim=1)
-        # register as a buffer
-        self.register_buffer('xz_l', xz_l)
+        self.xz_l = torch.stack([xz_starts, xz_ends], dim=1).tolist()        
         
-        self.x_dim = sum(xz_list)
-        self.z_dim = len(xz_list)
-        output_dim = (self.z_dim + self.x_dim)*(self.z_dim + self.x_dim + 1)
-        # # cholesky mask
-        # self.cholesky_mask = torch.tril(torch.ones(self.z_dim+self.x_dim, self.z_dim+self.x_dim))
-        # # # set diagonal to 0
-        # self.cholesky_mask = self.cholesky_mask - torch.diag_embed(torch.diagonal(self.cholesky_mask))
-        # self.cholesky_mask = self.cholesky_mask.unsqueeze(0)
+        self.x_dim = sum(dim_x_z)
+        self.z_dim = len(dim_x_z)
+        output_dim = (self.z_dim + self.x_dim)*(self.z_dim + self.x_dim + 1)        
 
         hidden_dim, num_layers = config['vae']['rnn']['hidden_size'], config['vae']['rnn']['num_layers']
         bidirectional = config['vae']['rnn']['bidirectional']
@@ -40,13 +33,10 @@ class VAE(nn.Module):
 
         self.encoder = nn.GRU(input_dim, hidden_dim, num_layers=num_layers, batch_first=True,
                               bidirectional=bidirectional, dropout=dropout if num_layers > 1 else 0)
-        self.posterior = nn.Linear(hidden_dim*2 if bidirectional else hidden_dim, output_dim)
-        
-        # self.encoder = TransformerModel(input_dim, z_dim, x_dim, hidden_dim, 4, hidden_dim, num_layers, dropout)
-        # self.posterior = nn.Linear(hidden_dim, output_dim)
+        self.posterior = nn.Linear(hidden_dim*2 if bidirectional else hidden_dim, output_dim)        
         
         # reconstruction
-        self.linear_maps = nn.ModuleList([nn.Linear(i, input_dim) for i in xz_list])        
+        self.linear_maps = nn.ModuleList([nn.Linear(i, input_dim) for i in dim_x_z])        
 
         # reconstruction_layers = nn.Sequential(nn.Linear(1, 32), nn.Tanh(),
         #                                       nn.Linear(32, 32), nn.ReLU(),
@@ -72,58 +62,13 @@ class VAE(nn.Module):
         self.softmax_temp = config['vae']['rnn']['softmax_temp']
 
         # name model
-        self.arch_name = 'vae_{}_{}_{}'.format(xz_list, hidden_dim, num_layers)
+        self.arch_name = 'vae_{}_{}_{}'.format(dim_x_z, hidden_dim, num_layers)
         if bidirectional:
             self.arch_name += '_bi'
         if neuron_bias is not None:
-            self.arch_name += '_bias'
-        
-        # moving average
-        self.moving_average = None
-        if self.moving_average is not None:
-            self.arch_name += '_average_'+str(self.moving_average)
-            print('Using moving average of', self.moving_average)
-        else:
-            print('Not using moving average')
-
-        # # smoothing
-        # self.smoothing = config['rnn']['smoothing']
-        # if self.smoothing:            
-        #     time_points = int(2.5/config['shape_dataset']['win_len'])
-        #     x = torch.linspace(-2, 0.5, time_points)
-        #     # construct x - x' for all pairs of x and x'
-        #     y = x.view(-1, 1) - x.view(1, -1)
-        #     # construct the kernel
-        #     self.smoothing_kernel = torch.exp(-y.pow(2)/2*self.smoothing**2)
-        
+            self.arch_name += '_bias'        
         # optmizer
         self.optimizer = torch.optim.Adam(self.parameters(), lr=config['vae']['lr'], weight_decay=config['vae']['weight_decay'])        
-
-        # # init model        
-        # if init is not None:
-        #     try:
-        #         data_des = 'dandi_{}/{}_ms'.format(config['shape_dataset']['id'], int(config['shape_dataset']['win_len']*1000))
-        #         pth = os.path.join(config['dir']['results'], data_des, init, 'best')
-        #         checkpoint = torch.load(pth, map_location=lambda storage, loc: storage)
-        #         # replace encoder in keys with nothing
-        #         checkpoint['model_state_dict'] = {k.replace('vae.', ''): v for k, v in checkpoint['model_state_dict'].items()}
-        #         self.load_state_dict(checkpoint['model_state_dict'])
-        #         print("Loading from pre-trained")
-        #     except:
-        #         print("Failed to load pre-trained")
-
-        assert self.neuron_bias is None and self.moving_average is None, "Not implemented"
-
-        if config['vae']['scheduler']['which'] == 'cosine':
-            restart = config['vae']['scheduler']['cosine_restart_after']
-            scheduler1 = torch.optim.lr_scheduler.ConstantLR(self.optimizer, factor=1, total_iters=restart+restart//2)
-            scheduler2 = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optimizer, T_0=restart)
-            self.scheduler = torch.optim.lr_scheduler.SequentialLR(self.optimizer, schedulers=[scheduler1, scheduler2], milestones=[restart//2])
-        elif config['vae']['scheduler']['which'] == 'decay':
-            self.scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=0.97)
-        else:
-            print('Scheduler not implemented for GRU')
-            self.scheduler = None
 
     def split(self, encoded):
         batch, seq, _ = encoded.shape
@@ -165,57 +110,24 @@ class VAE(nn.Module):
 
         encoded = self.posterior(encoded)
         mu, A = self.split(encoded)
-        
-
-        # # cholesky: make only diagonal positive
-        # # first reshape A to (batch*seq, z+x, z+x)
-        # A = A.reshape(batch*seq, self.z_dim+self.x_dim, self.z_dim+self.x_dim)        
-        # diag = torch.diagonal(A, dim1=-2, dim2=-1)        
-        # diag = nn.Softplus()(diag)
-        # A = A * self.cholesky_mask + torch.diag_embed(diag)        
-        # # reshape it back
-        # A = A.reshape(batch, seq, self.z_dim+self.x_dim, self.z_dim+self.x_dim)        
-                
-        # # smooth means        
-        # if self.moving_average is not None:
-        #     # both
-        #     mu = moving_average(mu, self.moving_average)
-        #     # only z
-        #     # mu[:, :, :self.z_dim] = moving_average(mu[:, :, :self.z_dim], self.moving_average)
-        #     # only x
-        #     # mu[:, :, self.z_dim:] = moving_average(mu[:, :, self.z_dim:], self.moving_average)
-
-        # accumulate
-        # mu = mu - mu[:, 0:1, :] # first is 0
-        # mu = torch.cumsum(mu, dim=1)
-        
-        # sample z and x
-        # sample_zx = self.reparameterize(mu, A)
-        # sample z and x 10 times and concatenate along batch
+               
         sample_zx = torch.cat([self.reparameterize(mu, A) for _ in range(n_samples)], dim=0)
         
         # extract x and z
-        z, x = sample_zx[:, :, :self.z_dim], sample_zx[:, :, self.z_dim:]
-        # z = torch.sigmoid(z*self.sigmoid_scaling_factor)
-        # z = torch.sigmoid(z)
+        z, x = sample_zx[:, :, :self.z_dim], sample_zx[:, :, self.z_dim:]        
         z = torch.nn.Softmax(dim=-1)(z/self.softmax_temp)                
-        # z = torch.nn.Tanh(dim=-1)(z/self.softmax_temp)
-        # x = torch.nn.Tanh()(x)
         
         # map x to observation
-        Cx_list = [self.linear_maps[i](x[:, :, s: e]) for i, (s, e) in enumerate(self.xz_l)]
-        # if any element is a tuple, take the first element
-        # Cx_list = [self.linear2(Cx[0]) if isinstance(Cx, tuple) else Cx for Cx in Cx_list]
-        # print([x.shape for x in Cx_list])
+        Cx_list = [self.linear_maps[i](x[:, :, s: e]) for i, (s, e) in enumerate(self.xz_l)]        
         Cx = torch.stack(Cx_list, dim=-1)        
         y_recon = torch.sum(Cx * z.unsqueeze(2), dim=3)        
 
-        # if self.neuron_bias is not None:
-        #     y_recon = y_recon + self.neuron_bias
+        if self.neuron_bias is not None:
+            y_recon = y_recon + self.neuron_bias
         y_recon = nn.Softplus()(y_recon)        
         return {'y_recon': y_recon, 'x_samples': x, 'z_samples': z, 'combined_mean': mu, 'combined_A': A}        
 
-    def loss(self, y, model_output):
+    def loss(self, y, model_output, behavior_batch):
         """
         y and y_recon are of shape [batch * n_samples, time, dim]
         mu and A are of shape [batch, time, z+x] and [batch, time, z+x, z+x]
@@ -275,50 +187,3 @@ class VAE(nn.Module):
         cov = torch.bmm(flat_A, torch.transpose(flat_A, 1, 2)).detach().view(batch, time, dim, dim).numpy()
         return y_recon, mean_x, mean_z, cov, cov, vae_output['x_samples'].detach().numpy(), vae_output['z_samples'].detach().numpy(), None, None
     
-
-class PositionalEncoding(nn.Module):
-
-    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 500):
-        super().__init__()
-        self.dropout = nn.Dropout(p=dropout)
-
-        position = torch.arange(max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
-        pe = torch.zeros(max_len, 1, d_model)
-        pe[:, 0, 0::2] = torch.sin(position * div_term)
-        pe[:, 0, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe)
-
-    def forward(self, x):
-        """
-        Arguments:
-            x: Tensor, shape ``[seq_len, batch_size, embedding_dim]``
-        """
-        x = x + self.pe[:x.size(0)]
-        return self.dropout(x)
-    
-
-class TransformerModel(nn.Module):
-
-    def __init__(self, input_dim: int, z_dim, x_dim, d_model: int, nhead: int, d_hid: int,
-                 nlayers: int, dropout: float = 0.5):
-        super().__init__()        
-        self.pos_encoder = PositionalEncoding(d_model, dropout)
-        encoder_layers = nn.TransformerEncoderLayer(d_model, nhead, d_hid, dropout)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, nlayers)        
-        self.embedding = nn.Linear(input_dim, d_model)
-        self.d_model = d_model                        
-
-    def forward(self, src):
-        """
-        Arguments:
-            src: Tensor, shape ``[batch_size, seq_len, dim]``            
-
-        Returns:
-            output Tensor of shape ``[seq_len, batch_size, ntoken]``
-        """        
-        src = self.embedding(src) * math.sqrt(self.d_model)
-        src = src.permute(1, 0, 2)        
-        src = self.pos_encoder(src)
-        output = self.transformer_encoder(src)        
-        return output.permute(1, 0, 2)

@@ -1,32 +1,23 @@
 import torch
 import torch.nn as nn
 # from decoder import LinearAccDecoder, CNNDecoder, CNNDecoderIndividual, RNNDecoderIndivdual, LogReg
-from decoder import CNNDecoderIndividual
-from vae import VAE
-from vae_family import VAEParameterised
-from vae_gp_separate import VAEGP
+from supervised_decoders.decoder import CNNDecoderIndividual
+from vae.vae import VAE
+from vae.vae_gp import VAEGP
 import os
 import utils
-from priors import GaussianPrior
-from vae_gp import VAEGPCombined
 
 
 class Model(nn.Module):
     def __init__(self, config, input_dim, neuron_bias=None):
         super().__init__()
-        self.config = config
-        # dimensions
-        xz_list = config['dim_x_z']
+        self.config = config        
         # vae
         which_vae = config['which_vae']
-        if which_vae == 'vae':        
-            self.vae = VAE(config, input_dim, xz_list, neuron_bias)        
-        elif which_vae == 'parameterised':
-            self.vae = VAEParameterised(config, input_dim, xz_list, neuron_bias)        
+        if which_vae == 'vae':
+            self.vae = VAE(config, input_dim, neuron_bias)                
         elif which_vae == 'vae_gp':
-            self.vae = VAEGP(config, input_dim, xz_list, neuron_bias)
-        elif which_vae == 'vae_gp':
-            self.vae = VAEGPCombined(config, input_dim, xz_list, neuron_bias)
+            self.vae = VAEGP(config, input_dim, neuron_bias)
         else:
             raise ValueError("Unknown VAE type")
         # print num train params in vae
@@ -34,56 +25,27 @@ class Model(nn.Module):
             
         # behavior decoder
         behavior_decoder = config['decoder']['which']        
-        behavior_weight = config['decoder']['behavior_weight']
-        self.behavior_weight = behavior_weight
             
-        if behavior_decoder == 'linear':            
-            self.behavior_decoder = LinearAccDecoder(config, xz_list)                        
-            print('Number of trainable parameters in behavior decoder:', utils.count_parameters(self.behavior_decoder))
-        elif behavior_decoder == 'logreg':
-            self.behavior_decoder = LogReg(config, xz_list)
-        elif behavior_decoder == 'cnn':
-            self.behavior_decoder = CNNDecoder(config, xz_list)            
-            print('Number of trainable parameters in behavior decoder:', utils.count_parameters(self.behavior_decoder))
-        elif behavior_decoder == 'cnn_indi':            
-            self.behavior_decoder = CNNDecoderIndividual(config, xz_list)
-            print('Number of trainable parameters in behavior decoder:', utils.count_parameters(self.behavior_decoder))
-        elif behavior_decoder == 'rnn':
-            self.behavior_decoder = RNNDecoderIndivdual(config, xz_list)
+        if behavior_decoder == 'cnn':            
+            self.behavior_decoder = CNNDecoderIndividual(config)
+            print('Number of trainable parameters in behavior decoder:', utils.count_parameters(self.behavior_decoder))        
         else:
             self.behavior_decoder = None
-            self.behavior_weight = 0        
-            print("No behavior decoder")            
-
-        # prior over z
-        self.z_prior = config['z_prior']['include']
-        if self.z_prior:
-            # keep only non-zero values in xz_list
-            xz_list = [x for x in xz_list if x > 0]
-            self.z_prior_wts = config['z_prior']['weights']
-            assert len(self.z_prior_wts) == len(xz_list), "Number of priors should match number of z dimensions"
-            self.learn_prior = config['z_prior']['learn']
-            prior_on_mean = config['z_prior']['prior_on_mean']
-            self.prior_modules = []            
-            for m, s, w in zip(config['z_prior']['means'], config['z_prior']['stds'], self.z_prior_wts):
-                self.prior_modules.append(GaussianPrior(m, s, w, 0.1, self.learn_prior, prior_on_mean))
-            self.prior_modules = nn.ModuleList(self.prior_modules)
-
+            print("No behavior decoder")
+        
         # name model
         self.arch_name = self.vae.arch_name        
         if self.behavior_decoder:
             self.arch_name += self.behavior_decoder.arch_name
-        if self.z_prior:
-            self.arch_name += '_prior'
-        self.final_path = utils.model_store_path(self.config, self.arch_name)
-        if not os.path.exists(self.final_path):
-            os.makedirs(self.final_path)
+        
+        self.model_store_pth = utils.model_store_path(self.config, self.arch_name)
+        if not os.path.exists(self.model_store_pth):
+            os.makedirs(self.model_store_pth)
 
         if config['vae_gp']['load_stage2']:
             print('Loading weights for s2')
-            pth = os.path.join(utils.model_store_path(config, self.arch_name), 'post_stage_2.pth')
-            weights = torch.load(pth)
-            # print(weights.keys(), self.state_dict().keys())
+            pth = os.path.join(self.model_store_pth, 'post_stage_2.pth')
+            weights = torch.load(open(pth, 'rb'))            
             # intersect keys
             keys = set(weights.keys()).intersection(set(self.state_dict().keys()))            
             self.load_state_dict(weights, strict=False)
@@ -91,7 +53,7 @@ class Model(nn.Module):
             assert config['vae_gp']['freeze_encoder_meanz'] is False, "Cannot freeze encoder after stage 2"
     
     def forward(self, spikes, n_samples, use_mean_for_decoding):
-        vae_output = self.vae(spikes, n_samples)        
+        vae_output = self.vae(spikes, n_samples, use_mean_for_decoding)        
         if self.behavior_decoder:
             if use_mean_for_decoding:
                 ### gp on x
@@ -99,6 +61,7 @@ class Model(nn.Module):
                 # mean_x, mean_z = torch.stack([x.mean for x in vae_output['x_distribution']], dim=-1), torch.stack([x.mean for x in vae_output['z_distributions']], dim=-1)                
                 softmax = nn.Softmax(dim=-1)
                 mean_z = softmax(mean_z)
+                # reshape flattened x
                 mean_x = mean_x.reshape(mean_z.shape[0], mean_z.shape[1], -1)
                 behavior, amp = self.behavior_decoder(mean_x, mean_z)
             else:
@@ -110,16 +73,10 @@ class Model(nn.Module):
         return vae_output, behavior, amp
 
     def loss(self, epoch, spikes_batch, behavior_batch, amp_batch, vae_pred, behavior_pred, amp_pred):
-        # loss = torch.tensor(0.0)        
-        # if epoch < 100:
-        #     self.vae.beta = 0.0
-        # else:
-        #     self.vae.beta = 1.0
-        # self.vae.softmax_temp = max(1 - (1 - 0.4) * (epoch / 800), 0.4)
         loss = self.vae.loss(spikes_batch, vae_pred, behavior_batch)
         loss_l = [loss.item()]
         if self.behavior_decoder:
-            behave_loss = self.behavior_weight * self.behavior_decoder.loss(behavior_pred, behavior_batch, amp_pred, amp_batch)            
+            behave_loss = self.behavior_decoder.loss(behavior_pred, behavior_batch, amp_pred, amp_batch)            
             loss += behave_loss
             loss_l.append(behave_loss.item())
         
@@ -129,22 +86,12 @@ class Model(nn.Module):
         # torch.nn.utils.clip_grad_norm_(self.vae.parameters(), 1)
         self.vae.optimizer.step()
         if self.behavior_decoder and train_decoder:            
-            self.behavior_decoder.optimizer.step()
-        if self.z_prior and self.learn_prior:
-            for prior in self.prior_modules:
-                prior.optimizer.step()
-
-    def scheduler_step(self, step_decoder):
-        if self.vae.scheduler:
-            self.vae.scheduler.step()
-        if self.behavior_decoder and self.behavior_decoder.scheduler and step_decoder:
-            self.behavior_decoder.scheduler.step()
-            # print("LR: ", self.behavior_decoder.scheduler.get_lr())
+            self.behavior_decoder.step()
 
     def optim_zero_grad(self):
         self.vae.optimizer.zero_grad()
         if self.behavior_decoder:
-            self.behavior_decoder.optimizer.zero_grad()
+            self.behavior_decoder.zero_grad()
         
     def save_model(self, save_prefix):
         """
@@ -153,9 +100,9 @@ class Model(nn.Module):
         :return: nothing
         """        
         if save_prefix is not None:
-            filename = os.path.join(self.final_path, str(save_prefix))
+            filename = os.path.join(self.model_store_pth, str(save_prefix))
         else:
-            filename = os.path.join(self.final_path, 'best')
+            filename = os.path.join(self.model_store_pth, 'best')
 
         torch.save({
             'model_state_dict': self.state_dict(),
@@ -163,7 +110,7 @@ class Model(nn.Module):
         }, filename)
         # print("Saved model for {}".format(suffix))
         # also dump model config
-        utils.dump_config(self.config, self.final_path)
+        utils.dump_config(self.config, self.model_store_pth)
 
     def load_model(self, save_prefix, base_path=None, strict=True):
         """
@@ -174,7 +121,7 @@ class Model(nn.Module):
         """
         
         if base_path is None:
-            base_path = utils.model_store_path(self.config, self.arch_name)
+            base_path = self.model_store_pth
         if save_prefix is not None:
             filename = os.path.join(base_path, str(save_prefix))
         else:
