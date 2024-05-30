@@ -1,6 +1,6 @@
 dir:
   # results: 'results_final/'
-  results: 'results/'
+  results: 'results_all6/'
   dataset: '../data_own/'
 
 shape_dataset:
@@ -13,18 +13,20 @@ shape_dataset:
   # id: sub-245CR_ses-20200331T142427
   # id: sub-KF134_ses-20180208T171905
 
-  win_len: 0.1
+  win_len: 0.1 # in seconds
 
-# mention x for stimulus, choice and rest
+# dimensionality of each subspace
 dim_x_z: [1, 1, 1]
-# dim_x_z: [2, 2, 2]
-# dim_x_z: [0, 0, 3]
+# subset of neurons
 chosen_neurons: [2, 4, 6, 8, 9, 11, 12, 14, 15, 16, 25, 27, 30, 33]
 
-which_vae: 'vae_gp_combined' # baseline or vae_gp
-# which_vae: 'baseline' # baseline or vae_gp
+# 'vae' or 'vae_gp'
+# vae has x and z modelled together but independent across time i.e. no GP prior
+# vae_gp has x and z modelled separately but with ability to add GP prior on z
+which_vae: 'vae_gp'
 
-vae_baseline:
+# parameters for the baseline vae
+vae:
   rnn:  
     bidirectional: True
     hidden_size: 8
@@ -32,7 +34,6 @@ vae_baseline:
     dropout: 0.1
     softmax_temp: 1    
   
-  # smoothing: 0.1
   lr: 0.01
   weight_decay: 0.01
 
@@ -44,77 +45,92 @@ vae_baseline:
 vae_gp:
   
   cov_type: 'diagonal' # full, banded or diagonal for z
-  apply_softplus: False
-  z_entropy:
-  softmax_temp: 1  
+  apply_softplus: False # whether to apply softplus on the diagonal of the covariance matrix
+  z_entropy: # whether to add entropy term to the loss
+  softmax_temp: 1 # temperature for the softmax
   
-  # load_stage1: post_stage1_priorx_null2
-  # freeze_encoder_meanz: True
-  # load_stage2: False
+  load_stage1: #post_stage1_priorx_null2
+  freeze_encoder_meanz: False
+  load_stage2: False
 
-  # load_stage1: post_stage1_priorx
+  # load_stage1: post_stage1_nopriorx
   # freeze_encoder_meanz: True  
   # load_stage2: False
 
-  load_stage1: 
-  freeze_encoder_meanz: False
-  load_stage2: True
-  
-  
+  # load_stage1: 
+  # freeze_encoder_meanz: False
+  # load_stage2: True
+
+  # gru parameters
   rnn_encoder:
     bidirectional: True
     hidden_size: 8
     num_layers: 2
     dropout: 0.1
   
+  # mapping from rnn output to mean and std
   post_rnn_linear:
     hidden_dims: [8]
     dropout: 0
 
+  # whether to add loss terms for disentanglement
+  disentangle: True
+  
+  # kl divergence terms
   kl_beta: 3
   
+  # parameters for gp smoothing
   smoothing_sigma: 3
   noise_sigma: 0.01
-  rbf_scaling: 0.5
+  kernel_scale: 0.5
 
   weight_decay: 0.001
 
   lr: 0.01
 
+  # whether to add monotonicty constraint
   monotonic:
     use: True
+    # controls steepness of curve
     nu_z: 1
     nu_g: 1
     coeff: 10
+    # which z latents to apply to
     mask: [False, True, False]
 
+# parameters for the supervision
 decoder:
   behavior_weight: 1
   
+  # which latents to use
   stimulus_latent: 0
   choice_latent: 1
   amplitude_latent:
 
-  stimulus_weight: 10
+  stimulus_weight: 20
   choice_weight: 5
   amplitude_weight:
   
   which: 'cnn_indi'
   # which: 'logreg'
   # which: ''
+  
+  # train after certain epochs
   train_decoder_after: 0
-  cross_terms: False
+  # whether to use cross terms
+  cross_terms: False  
   
   cnn:
     # channels: [4, 4, 4, 4, 4, 4]
     channels: [8]
-    kernel_size: 5
+    kernel_size: 3
     amp_channels: [8]
     amp_kernel_size: 5
     dropout: 0
     lr: 0.01
     weight_decay: 0
     normalize_trial_time: True
+    which_forward: 'argmax'
 
   rnn:
     layers: 1

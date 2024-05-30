@@ -247,13 +247,13 @@ class TimeSeriesCombined(nn.Module):
             raise ValueError('Invalid covariance type')
         
         ### gp on x
-        # self.cov_x = nn.Sequential(*get_linear(inp_dim, latent_dim_x*latent_dim_x, hidden_layers, dropout))
-        self.cov_x = nn.Sequential(*get_linear(inp_dim, latent_dim_x, hidden_layers, dropout))
+        self.cov_x = nn.Sequential(*get_linear(inp_dim, latent_dim_x*latent_dim_x, hidden_layers, dropout))
+        # self.cov_x = nn.Sequential(*get_linear(inp_dim, latent_dim_x, hidden_layers, dropout))
         
         self.smoothing_sigma = model_config['smoothing_sigma']
         if self.smoothing_sigma:            
             self.cov_prior = rbf_kernel(time_bins, self.smoothing_sigma)
-            self.cov_prior *= model_config['rbf_scaling']            
+            self.cov_prior *= model_config['kernel_scale']            
             self.cov_prior += model_config['noise_sigma'] * torch.eye(time_bins)
             try:
                 self.prior_cholesky = torch.linalg.cholesky(self.cov_prior)
@@ -266,7 +266,7 @@ class TimeSeriesCombined(nn.Module):
             # plt.imshow(self.cov_prior)
             # plt.colorbar()
             print('Log det:', self.prior_log_det, 'Inverse max: ', self.prior_inv.max(), 'Covariance max: ', self.cov_prior.max())
-            self.name += '_noise_{}_rbfscale_{}'.format(model_config['noise_sigma'], model_config['rbf_scaling'])
+            self.name += '_noise_{}_rbfscale_{}'.format(model_config['noise_sigma'], model_config['kernel_scale'])
         else:
             self.prior_cholesky = torch.eye(time_bins)        
         
@@ -348,24 +348,25 @@ class TimeSeriesCombined(nn.Module):
             raise ValueError('Invalid covariance type')
 
         ### gp on x
-        # # construct x distribution
-        # cov_x = self.cov_x(encoded)
-        # batch, time, dim = mean_x.shape
-        # mean_x_flat = mean_x.view(batch*time, dim)        
-        # cov_x_flat = cov_x.view(batch*time, dim, dim)
-        # x_distribution = CustomDistribution(mean_x_flat, cholesky_cov=cov_x_flat)
-        ########## new
-        x_distribution = []
-        mean_x[:, :, :2] = mean_x[:, :, :2] - mean_x[:, 0:1, :2]
-        cov_x = self.cov_x(encoded)[:]
+        # construct x distribution
+        cov_x = self.cov_x(encoded)
         batch, time, dim = mean_x.shape
-        for i in range(dim):                    
-            # diag_elems = torch.exp(bd_z[:, :, i])
-            diag_elems = (cov_x[:, :, i])**2
-            # contruct a distribution with diagonal elements
-            # distribution = torch.distributions.MultivariateNormal(mean_z[:, :, i], scale_tril=torch.diag_embed(diag_elems))                
-            distribution = CustomDistribution(mean_x[:, :, i], cholesky_cov=torch.diag_embed(diag_elems))
-            x_distribution.append(distribution)
+        mean_x[:, :, :2] = mean_x[:, :, :2] - mean_x[:, 0:1, :2]
+        mean_x_flat = mean_x.view(batch*time, dim)        
+        cov_x_flat = cov_x.view(batch*time, dim, dim)
+        x_distribution = CustomDistribution(mean_x_flat, cholesky_cov=cov_x_flat)
+        
+        # x_distribution = []
+        # mean_x[:, :, :2] = mean_x[:, :, :2] - mean_x[:, 0:1, :2]
+        # cov_x = self.cov_x(encoded)[:]
+        # batch, time, dim = mean_x.shape
+        # for i in range(dim):                    
+        #     # diag_elems = torch.exp(bd_z[:, :, i])
+        #     diag_elems = (cov_x[:, :, i])**2
+        #     # contruct a distribution with diagonal elements
+        #     # distribution = torch.distributions.MultivariateNormal(mean_z[:, :, i], scale_tril=torch.diag_embed(diag_elems))                
+        #     distribution = CustomDistribution(mean_x[:, :, i], cholesky_cov=torch.diag_embed(diag_elems))
+        #     x_distribution.append(distribution)
 
 
         to_ret_dict = {'z_distributions': z_distribution, 'x_distribution': x_distribution}
@@ -400,6 +401,7 @@ class VAEGPCombined(nn.Module):
         xz_l = torch.stack([xz_starts, xz_ends], dim=1)
         # register as a buffer
         self.register_buffer('xz_l', xz_l)
+        self.config = config
         
         self.x_dim = sum(xz_list)
         self.z_dim = len(xz_list)
@@ -441,7 +443,8 @@ class VAEGPCombined(nn.Module):
         # optimizer
         self.optimizer = torch.optim.Adam(self.parameters(), lr=config['vae_gp']['lr'], weight_decay=config['vae_gp']['weight_decay'])        
 
-        self.scheduler = None        
+        self.scheduler = None     
+        self.disentangle = config['vae_gp']['disentangle']   
 
 
     def forward(self, y, n_samples):
@@ -455,9 +458,8 @@ class VAEGPCombined(nn.Module):
         z_samples = torch.nn.Softmax(dim=2)(z_samples_pre/self.softmax_temp)
         # print(z_samples.shape)
         ### gp on x
-        # x_samples = torch.cat([x_distributions.sample().view(batch, seq, -1) for _ in range(n_samples)], dim=0)        
-        ###### new
-        x_samples = torch.stack([torch.cat([x_distribution.sample() for _ in range(n_samples)], dim=0) for x_distribution in x_distributions], dim=-1)        
+        x_samples = torch.cat([x_distributions.sample().view(batch, seq, -1) for _ in range(n_samples)], dim=0)                
+        # x_samples = torch.stack([torch.cat([x_distribution.sample() for _ in range(n_samples)], dim=0) for x_distribution in x_distributions], dim=-1)        
 
         # x_samples = torch.cat([x_distribution.sample().view(batch, seq, -1) for _ in range(1)], dim=0)        
         # # construct z0 as 1-(z1+z2)/2
@@ -491,7 +493,7 @@ class VAEGPCombined(nn.Module):
 
         return out_dict
 
-    def loss(self, y, model_output):
+    def loss(self, y, model_output, behavior):
         """
         y and y_recon are of shape [batch * n_samples, time, dim]
         mu and A are of shape (batch, seq, x/z) and (batch, x/z, seq, seq)
@@ -512,7 +514,7 @@ class VAEGPCombined(nn.Module):
         if self.beta:            
             # kl divergence
             ### gp on x
-            # kl_x = x_distribution.kl_divergence_normal()
+            kl_x = x_distribution.kl_divergence_normal()
             if USING_TORCH_DIST:
                 kl_z = self.zx_encoder.kl_divergence_z(z_distributions)            
             else:
@@ -524,13 +526,13 @@ class VAEGPCombined(nn.Module):
                     else:
                         kl_z += d.kl_divergence_normal()
                 ### gp on x
-                kl_x = 0
-                for d in x_distribution:
-                    if self.using_smoothing:
-                        kld = d.kl_divergence_any(torch.zeros_like(d.mean), self.zx_encoder.cov_prior, self.zx_encoder.prior_inv, self.zx_encoder.prior_log_det)
-                        kl_x += kld
-                    else:
-                        kl_x += d.kl_divergence_normal()
+                # kl_x = 0
+                # for d in x_distribution:
+                #     if self.using_smoothing:
+                #         kld = d.kl_divergence_any(torch.zeros_like(d.mean), self.zx_encoder.cov_prior, self.zx_encoder.prior_inv, self.zx_encoder.prior_log_det)
+                #         kl_x += kld
+                #     else:
+                #         kl_x += d.kl_divergence_normal()
                      
             kl = kl_x + kl_z
             loss += self.beta * kl            
@@ -587,6 +589,50 @@ class VAEGPCombined(nn.Module):
         # print(model_output['x_distribution'][0].mean.shape)        
         # loss += torch.stack([x.mean[:, 0].pow(2) for x in model_output['x_distribution'][:2]]).sum() * 10
         # loss += torch.stack([x.mean[:, -1].pow(2) for x in model_output['x_distribution'][:2]]).sum() * 10
+        same_term = 500
+        cross_terms = 1000
+        if self.disentangle and len(self.config['decoder']['which']):
+            # trial-averaged x3 where behavior is 1
+            stim, choice = behavior[:, 0], behavior[:, 1]
+            mean_reshaped = x_distribution.mean.view(batch, seq, self.x_dim)
+            x0 = mean_reshaped[:, :, 0]
+            x1 = mean_reshaped[:, :, 1]
+            x2 = mean_reshaped[:, :, 2]            
+            # group x2 across both
+            x_stim_left, x_stim_right = x2[stim == 1].mean(dim=0), x2[stim == 0].mean(dim=0)
+            x_choice_left, x_choice_right = x2[choice == 1].mean(dim=0), x2[choice == 0].mean(dim=0)
+            loss += (x_stim_left - x_stim_right).pow(2).sum() * same_term            
+            loss += (x_choice_left - x_choice_right).pow(2).sum() * same_term
+            # group x0 across choice
+            x0_choice_left, x0_choice_right = x0[choice == 1].mean(dim=0), x0[choice == 0].mean(dim=0)
+            loss += (x0_choice_left - x0_choice_right).pow(2).sum() * cross_terms
+            # group x1 across stimulus
+            x1_stim_left, x1_stim_right = x1[stim == 1].mean(dim=0), x1[stim == 0].mean(dim=0)
+            loss += (x1_stim_left - x1_stim_right).pow(2).sum() * cross_terms
+            
+            # group z
+            z0, z1, z2 = z_mean[:, :, 0], z_mean[:, :, 1], z_mean[:, :, 2]
+            # group z2 across null
+            z2_stim_left, z2_stim_right = z2[stim == 1].mean(dim=0), z2[stim == 0].mean(dim=0)
+            z2_choice_left, z2_choice_right = z2[choice == 1].mean(dim=0), z2[choice == 0].mean(dim=0)
+            loss += (z2_stim_left - z2_stim_right).pow(2).sum() * same_term
+            loss += (z2_choice_left - z2_choice_right).pow(2).sum() * same_term
+            # group z0 across choice
+            z0_choice_left, z0_choice_right = z0[choice == 1].mean(dim=0), z0[choice == 0].mean(dim=0)
+            loss += (z0_choice_left - z0_choice_right).pow(2).sum() * cross_terms
+            # group z1 across stimulus
+            z1_stim_left, z1_stim_right = z1[stim == 1].mean(dim=0), z1[stim == 0].mean(dim=0)
+            loss += (z1_stim_left - z1_stim_right).pow(2).sum() * cross_terms
+            # group z0 across stimulus
+            z0_stim_left, z0_stim_right = z0[stim == 1].mean(dim=0), z0[stim == 0].mean(dim=0)
+            loss += (z0_stim_left - z0_stim_right).pow(2).sum() * same_term
+            # group z1 across choice
+            z1_choice_left, z1_choice_right = z1[choice == 1].mean(dim=0), z1[choice == 0].mean(dim=0)
+            loss += (z1_choice_left - z1_choice_right).pow(2).sum() * same_term
+
+
+
+
 
         return loss/(batch * num_samples)
     
@@ -601,10 +647,10 @@ class VAEGPCombined(nn.Module):
             y_recon = vae_output['y_recon'].detach().numpy()
             batch, time, _ = y_recon.shape
             ### gp on x
-            # mean_x = vae_output['x_distribution'].mean.detach().numpy().reshape(batch, time, -1)
-            # cov_x = vae_output['x_distribution'].get_covariance_matrix().detach().numpy().reshape(batch, time, self.x_dim, self.x_dim)
-            mean_x = torch.stack([x.mean for x in vae_output['x_distribution']], dim=-1).detach().numpy()
-            cov_x = torch.stack([x.get_covariance_matrix() for x in vae_output['x_distribution']], dim=-1).detach().numpy()
+            mean_x = vae_output['x_distribution'].mean.detach().numpy().reshape(batch, time, -1)
+            cov_x = vae_output['x_distribution'].get_covariance_matrix().detach().numpy().reshape(batch, time, self.x_dim, self.x_dim)
+            # mean_x = torch.stack([x.mean for x in vae_output['x_distribution']], dim=-1).detach().numpy()
+            # cov_x = torch.stack([x.get_covariance_matrix() for x in vae_output['x_distribution']], dim=-1).detach().numpy()
             mean_z = torch.stack([x.mean for x in vae_output['z_distributions']], dim=-1).detach().numpy()
             cov_z = torch.stack([x.get_covariance_matrix() for x in vae_output['z_distributions']], dim=-1).detach().numpy()
         if self.zx_encoder.monotonic:

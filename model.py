@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
-from decoder import LinearAccDecoder, CNNDecoder, CNNDecoderIndividual, RNNDecoderIndivdual, LogReg
+# from decoder import LinearAccDecoder, CNNDecoder, CNNDecoderIndividual, RNNDecoderIndivdual, LogReg
+from decoder import CNNDecoderIndividual
 from vae import VAE
 from vae_family import VAEParameterised
 from vae_gp_separate import VAEGP
@@ -18,13 +19,13 @@ class Model(nn.Module):
         xz_list = config['dim_x_z']
         # vae
         which_vae = config['which_vae']
-        if which_vae == 'baseline':        
+        if which_vae == 'vae':        
             self.vae = VAE(config, input_dim, xz_list, neuron_bias)        
         elif which_vae == 'parameterised':
             self.vae = VAEParameterised(config, input_dim, xz_list, neuron_bias)        
         elif which_vae == 'vae_gp':
             self.vae = VAEGP(config, input_dim, xz_list, neuron_bias)
-        elif which_vae == 'vae_gp_combined':
+        elif which_vae == 'vae_gp':
             self.vae = VAEGPCombined(config, input_dim, xz_list, neuron_bias)
         else:
             raise ValueError("Unknown VAE type")
@@ -94,8 +95,8 @@ class Model(nn.Module):
         if self.behavior_decoder:
             if use_mean_for_decoding:
                 ### gp on x
-                # mean_x, mean_z = vae_output['x_distribution'].mean, torch.stack([x.mean for x in vae_output['z_distributions']], dim=-1)                
-                mean_x, mean_z = torch.stack([x.mean for x in vae_output['x_distribution']], dim=-1), torch.stack([x.mean for x in vae_output['z_distributions']], dim=-1)                
+                mean_x, mean_z = vae_output['x_distribution'].mean, torch.stack([x.mean for x in vae_output['z_distributions']], dim=-1)                
+                # mean_x, mean_z = torch.stack([x.mean for x in vae_output['x_distribution']], dim=-1), torch.stack([x.mean for x in vae_output['z_distributions']], dim=-1)                
                 softmax = nn.Softmax(dim=-1)
                 mean_z = softmax(mean_z)
                 mean_x = mean_x.reshape(mean_z.shape[0], mean_z.shape[1], -1)
@@ -115,7 +116,7 @@ class Model(nn.Module):
         # else:
         #     self.vae.beta = 1.0
         # self.vae.softmax_temp = max(1 - (1 - 0.4) * (epoch / 800), 0.4)
-        loss = self.vae.loss(spikes_batch, vae_pred)
+        loss = self.vae.loss(spikes_batch, vae_pred, behavior_batch)
         loss_l = [loss.item()]
         if self.behavior_decoder:
             behave_loss = self.behavior_weight * self.behavior_decoder.loss(behavior_pred, behavior_batch, amp_pred, amp_batch)            
