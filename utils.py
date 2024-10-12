@@ -76,15 +76,6 @@ def dump_config(config, folder_path):
     with open(os.path.join(folder_path, 'config.json'), 'w') as f:
         json.dump(config, f, indent=4)
 
-def load_dataset(config):
-    base_path = config['dir']['dataset']
-    session = config['shape_dataset']['id']
-    file_name = 'shape_processed_behave_spike_contact_{}_ms'.format(int(config['shape_dataset']['win_len']*1000))
-    with open(os.path.join(base_path, session, file_name), 'rb') as f:
-        behaviour_data, spikes, trial_id = pickle.load(f)
-    if config['chosen_neurons']:
-        spikes = np.array(spikes)[:, :, config['chosen_neurons']]
-    return behaviour_data, spikes, trial_id
 
 def model_store_path(config, arch_name):    
     data_des = 'dandi_{}/{}_ms'.format(config['shape_dataset']['id'], int(config['shape_dataset']['win_len']*1000))

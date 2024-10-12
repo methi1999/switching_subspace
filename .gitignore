@@ -4,6 +4,7 @@ __pycache__/
 .vscode/
 results/
 misc/
+results_all6/
 
 *.pkl
 *.pth

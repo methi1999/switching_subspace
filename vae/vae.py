@@ -100,7 +100,7 @@ class VAE(nn.Module):
 
     #     return dist.sample().reshape(batch, seq, mu_dim)
 
-    def forward(self, y, n_samples):
+    def forward(self, y, n_samples, use_mean_for_decoding):
         # y is of shape (batch_size, seq_len, input_dim)
         batch, seq, input_dim = y.shape
         encoded, _ = self.encoder(y)
@@ -110,8 +110,12 @@ class VAE(nn.Module):
 
         encoded = self.posterior(encoded)
         mu, A = self.split(encoded)
-               
-        sample_zx = torch.cat([self.reparameterize(mu, A) for _ in range(n_samples)], dim=0)
+        
+        if use_mean_for_decoding:
+            assert n_samples == 1, "n_samples should be 1 when using mean for decoding"
+            sample_zx = mu
+        else:
+            sample_zx = torch.cat([self.reparameterize(mu, A) for _ in range(n_samples)], dim=0)
         
         # extract x and z
         z, x = sample_zx[:, :, :self.z_dim], sample_zx[:, :, self.z_dim:]        

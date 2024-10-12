@@ -136,7 +136,7 @@ class TimeSeriesCombined(nn.Module):
             self.prior_inv = torch.linalg.inv(self.cov_prior)            
             self.prior_log_det = torch.logdet(self.cov_prior)
             
-            print('Log det:', self.prior_log_det, 'Inverse max: ', self.prior_inv.max(), 'Covariance max: ', self.cov_prior.max())
+            # print('Log det:', self.prior_log_det, 'Inverse max: ', self.prior_inv.max(), 'Covariance max: ', self.cov_prior.max())
             self.name += '_noise_{}_rbfscale_{}'.format(model_config['noise_sigma'], model_config['kernel_scale'])
         else:
             self.prior_cholesky = torch.eye(time_bins)        
@@ -325,8 +325,8 @@ class VAEGP(nn.Module):
             z_samples = torch.nn.Softmax(dim=2)(z_samples_pre/self.softmax_temp)
             # print(z_samples.shape)
             ### gp on x
-            x_samples = x_distributions.mean.view(batch, seq, -1)
-            # x_samples = torch.stack([torch.cat([x_distribution.sample() for _ in range(n_samples)], dim=0) for x_distribution in x_distributions], dim=-1)        
+            # x_samples = x_distributions.mean.view(batch, seq, -1)
+            x_samples = torch.stack([torch.cat([x_distribution.sample() for _ in range(n_samples)], dim=0) for x_distribution in x_distributions], dim=-1)        
         else:
             z_samples_pre = torch.stack([torch.cat([z_distribution.sample() for _ in range(n_samples)], dim=0) for z_distribution in z_distributions], dim=-1)
             z_samples = torch.nn.Softmax(dim=2)(z_samples_pre/self.softmax_temp)

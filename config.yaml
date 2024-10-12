@@ -15,6 +15,10 @@ shape_dataset:
 
   win_len: 0.1 # in seconds
 
+cv:
+  num_folds: 5
+  seed: 7
+
 # dimensionality of each subspace
 dim_x_z: [1, 1, 1]
 # subset of neurons
@@ -66,7 +70,7 @@ vae_gp:
   rnn_encoder:
     bidirectional: True
     hidden_size: 8
-    num_layers: 2
+    num_layers: 1
     dropout: 0.1
   
   # mapping from rnn output to mean and std
@@ -81,7 +85,7 @@ vae_gp:
   kl_beta: 3
   
   # parameters for gp smoothing
-  smoothing_sigma: 3
+  smoothing_sigma: 2
   noise_sigma: 0.01
   kernel_scale: 0.5
 
@@ -115,7 +119,7 @@ decoder:
   train_decoder_after: 0  
 
   # which
-  which: 'cnn' # 'cnn', 'rnn' or 'linear'
+  which: '' # 'cnn', 'rnn' or 'linear'
   
   cnn_global:    
     channels: [8]
@@ -157,7 +161,7 @@ early_stop:
   delta: 1 # improvement is defined as a decrease of at least this much
   test_every_new: 2 # how often to test while in slowdown
 
-epochs: 2000
+epochs: 1000
 test_every: 20
 
 batch_size: 192 # batch size for training
